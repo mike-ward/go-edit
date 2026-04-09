@@ -2,6 +2,8 @@ package buffer
 
 import (
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -38,6 +40,120 @@ func TestLoadAndString(t *testing.T) {
 		if got := b.String(); got != in {
 			t.Errorf("round-trip %q -> %q", in, got)
 		}
+	}
+}
+
+func TestLoadDetectsEncodingAndEOL(t *testing.T) {
+	// CRLF file should normalize to LF in buffer, with Props.EOL = EOLCRLF.
+	raw := "line1\r\nline2\r\n"
+	b := FromBytes([]byte(raw))
+	// FromBytes does NOT normalize — it's raw.
+	// Load (via io.Reader) does.
+	b2, err := Load(strings.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b2.Props.EOL != EOLCRLF {
+		t.Errorf("EOL = %d, want EOLCRLF(%d)", b2.Props.EOL, EOLCRLF)
+	}
+	if b2.Props.Encoding != EncodingUTF8 {
+		t.Errorf("Encoding = %d, want UTF8", b2.Props.Encoding)
+	}
+	// Buffer content should be LF-normalized.
+	if got := b2.String(); got != "line1\nline2\n" {
+		t.Errorf("content = %q, want LF-normalized", got)
+	}
+	_ = b // unused but shows FromBytes doesn't normalize
+}
+
+func TestLoadFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.txt")
+	content := "hello\r\nworld\r\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Props.FilePath != path {
+		t.Errorf("FilePath = %q, want %q", b.Props.FilePath, path)
+	}
+	if b.Props.EOL != EOLCRLF {
+		t.Errorf("EOL = %d, want EOLCRLF", b.Props.EOL)
+	}
+	if b.Props.FileMode == 0 {
+		t.Error("FileMode not set")
+	}
+	if b.Props.ModTime.IsZero() {
+		t.Error("ModTime not set")
+	}
+	// Content normalized to LF.
+	if got := b.String(); got != "hello\nworld\n" {
+		t.Errorf("content = %q", got)
+	}
+}
+
+func TestDirtyFlag(t *testing.T) {
+	b := New()
+	if b.Dirty() {
+		t.Error("new buffer should not be dirty")
+	}
+	b.Apply(Edit{NewBytes: []byte("x")})
+	if !b.Dirty() {
+		t.Error("buffer should be dirty after Apply")
+	}
+	b.MarkClean()
+	if b.Dirty() {
+		t.Error("buffer should be clean after MarkClean")
+	}
+}
+
+func TestFromRawBytes_UTF16CRLF(t *testing.T) {
+	// "A\r\nB\r\n" in UTF-16 LE with BOM.
+	data := []byte{
+		0xFF, 0xFE, // BOM
+		'A', 0, '\r', 0, '\n', 0,
+		'B', 0, '\r', 0, '\n', 0,
+	}
+	b, err := fromRawBytes(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// EOL must be CRLF (not mixed) — validates post-transcode detection.
+	if b.Props.EOL != EOLCRLF {
+		t.Errorf("EOL = %d, want EOLCRLF(%d)", b.Props.EOL, EOLCRLF)
+	}
+	if b.Props.Encoding != EncodingUTF16LE {
+		t.Errorf("Encoding = %d, want UTF16LE", b.Props.Encoding)
+	}
+	// Buffer content should be LF-normalized UTF-8.
+	if got := b.String(); got != "A\nB\n" {
+		t.Errorf("content = %q", got)
+	}
+}
+
+func TestBytes_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"empty", "", ""},
+		{"single line", "hello", "hello"},
+		{"newline only", "\n", "\n"},
+		{"empty lines", "\n\n\n", "\n\n\n"},
+		{"trailing newline", "a\nb\n", "a\nb\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := FromBytes([]byte(tt.src))
+			if got := string(b.Bytes()); got != tt.want {
+				t.Errorf("Bytes() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

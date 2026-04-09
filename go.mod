@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/mike-ward/go-glyph v1.6.4
 	github.com/mike-ward/go-gui v0.9.2
+	golang.org/x/text v0.36.0
 )
 
 require (

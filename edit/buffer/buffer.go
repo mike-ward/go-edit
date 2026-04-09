@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 )
 
 // MaxLoadBytes caps the number of bytes Buffer.Load will read from
@@ -16,16 +17,28 @@ const MaxLoadBytes = 1 << 28 // 256 MiB
 // empty line for an empty document).
 type Buffer struct {
 	lines []*line
+	Props FileProps
+	dirty bool
 }
 
 // New returns an empty buffer containing a single empty line.
 func New() *Buffer {
-	return &Buffer{lines: []*line{newLine(nil)}}
+	return &Buffer{
+		lines: []*line{newLine(nil)},
+		Props: DefaultFileProps(),
+	}
 }
 
-// Load reads r fully and splits on '\n'. Bytes are preserved verbatim;
-// no EOL normalization. A trailing newline produces a final empty line,
-// matching standard text-file semantics.
+// Dirty reports whether the buffer has been modified since the last
+// load or save.
+func (b *Buffer) Dirty() bool { return b.dirty }
+
+// MarkClean clears the dirty flag, typically after a successful save.
+func (b *Buffer) MarkClean() { b.dirty = false }
+
+// Load reads r fully, detects encoding and EOL convention,
+// transcodes to UTF-8, normalizes line endings to LF, and splits
+// into lines. Detected metadata is stored in Props.
 //
 // Load caps the read at MaxLoadBytes and returns an error if r
 // would produce more. Callers that need to load larger files can
@@ -43,7 +56,68 @@ func Load(r io.Reader) (*Buffer, error) {
 	if len(raw) > MaxLoadBytes {
 		return nil, fmt.Errorf("buffer: input exceeds %d bytes", MaxLoadBytes)
 	}
-	return FromBytes(raw), nil
+	return fromRawBytes(raw)
+}
+
+// LoadFile opens path, reads its contents, and returns a Buffer
+// with Props.FilePath, FileMode, and ModTime populated from stat.
+func LoadFile(path string) (*Buffer, error) {
+	if path == "" {
+		return nil, fmt.Errorf("buffer: empty file path")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close() //nolint:errcheck
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	buf, err := Load(f)
+	if err != nil {
+		return nil, err
+	}
+	buf.Props.FilePath = path
+	buf.Props.FileMode = info.Mode()
+	buf.Props.ModTime = info.ModTime()
+	return buf, nil
+}
+
+// fromRawBytes detects encoding/EOL, transcodes, normalizes, and
+// builds the buffer.
+func fromRawBytes(raw []byte) (*Buffer, error) {
+	if len(raw) == 0 {
+		return New(), nil
+	}
+
+	enc, hasBOM := sniffEncoding(raw)
+
+	utf8Data, err := decodeToUTF8(raw, enc)
+	if err != nil {
+		return nil, fmt.Errorf("buffer: decode %v: %w", enc, err)
+	}
+
+	// Detect EOL after transcoding so UTF-16 \r\n (multi-byte code
+	// units) are correctly recognized as CRLF, not mixed CR+LF.
+	eol := detectEOL(utf8Data)
+
+	if enc != EncodingRaw {
+		utf8Data = normalizeEOL(utf8Data)
+	}
+
+	b := FromBytes(utf8Data)
+	b.Props = FileProps{
+		EOL:          eol,
+		Encoding:     enc,
+		HasBOM:       hasBOM,
+		FinalNewline: true,
+		PreserveBOM:  true,
+		IndentStyle:  detectIndent(b),
+	}
+	return b, nil
 }
 
 // FromBytes builds a buffer from raw bytes without I/O.
@@ -56,7 +130,7 @@ func FromBytes(raw []byte) *Buffer {
 	for i, p := range parts {
 		lines[i] = newLine(p)
 	}
-	return &Buffer{lines: lines}
+	return &Buffer{lines: lines, Props: DefaultFileProps()}
 }
 
 // LineCount returns the number of lines. Always >= 1.
@@ -77,8 +151,8 @@ func (b *Buffer) Len() int {
 	return n
 }
 
-// String returns the full buffer as a string. Testing only — allocates.
-func (b *Buffer) String() string {
+// Bytes returns the full buffer content as LF-separated bytes.
+func (b *Buffer) Bytes() []byte {
 	var out bytes.Buffer
 	out.Grow(b.Len())
 	for i, l := range b.lines {
@@ -87,8 +161,11 @@ func (b *Buffer) String() string {
 		}
 		out.Write(l.bytes())
 	}
-	return out.String()
+	return out.Bytes()
 }
+
+// String returns the full buffer as a string. Testing only — allocates.
+func (b *Buffer) String() string { return string(b.Bytes()) }
 
 // Apply is the single mutation choke point. Every edit routes through
 // here so EditFilters, marks, and undo (Phases 1.5, 3) can observe one
@@ -98,6 +175,7 @@ func (b *Buffer) String() string {
 // It tolerates out-of-range columns by clamping. It never panics on
 // user input. Panic policy locked in Phase -1.
 func (b *Buffer) Apply(e Edit) Change {
+	b.dirty = true
 	e.Range = b.clampRange(e.Range)
 	old := b.bytesInRange(e.Range)
 

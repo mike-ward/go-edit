@@ -35,12 +35,7 @@ func loadBuffer() (*buffer.Buffer, string, error) {
 	if len(os.Args) < 2 {
 		return buffer.FromBytes([]byte(sample)), "<sample>", nil
 	}
-	f, err := os.Open(os.Args[1])
-	if err != nil {
-		return nil, "", err
-	}
-	defer f.Close() //nolint:errcheck // best-effort close on read-only file
-	buf, err := buffer.Load(f)
+	buf, err := buffer.LoadFile(os.Args[1])
 	if err != nil {
 		return nil, "", err
 	}
