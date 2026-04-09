@@ -50,12 +50,29 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 		}
 		slices.SortFunc(decos, decoCompare)
 
-		// Selection range (computed once for all lines).
-		var sel buffer.Range
-		hasSel := st.Anchor != st.Cursor
-		if hasSel {
-			sel = orderedRange(st.Anchor, st.Cursor)
+		// Precompute selection ranges for all cursors.
+		// Stack alloc for the common single-cursor case.
+		type selInfo struct {
+			sel    buffer.Range
+			hasSel bool
 		}
+		var selBuf [4]selInfo
+		var sels []selInfo
+		if len(st.Cursors) <= len(selBuf) {
+			sels = selBuf[:len(st.Cursors)]
+		} else {
+			sels = make([]selInfo, len(st.Cursors))
+		}
+		for ci := range st.Cursors {
+			cs := &st.Cursors[ci]
+			if cs.HasSelection() {
+				sels[ci] = selInfo{
+					sel:    cs.SelectionRange(),
+					hasSel: true,
+				}
+			}
+		}
+
 		for i := first; i <= last; i++ {
 			y := float32(i)*lh - st.ScrollY
 
@@ -68,10 +85,13 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 
 			lineBytes := buf.Line(i)
 
-			// Draw selection background before text.
-			if hasSel {
-				drawSelectionBg(dc, sel, i, lineBytes,
-					textX, y, lh, st.Measurer, selectionBgColor)
+			// Draw selection backgrounds for all cursors.
+			for ci := range sels {
+				if sels[ci].hasSel {
+					drawSelectionBg(dc, sels[ci].sel, i,
+						lineBytes, textX, y, lh,
+						st.Measurer, selectionBgColor)
+				}
 			}
 
 			lineDecos := decosForLine(decos, i)
@@ -87,12 +107,15 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 			}
 		}
 
-		// Cursor.
-		if st.Cursor.Line >= first && st.Cursor.Line <= last {
-			cy := float32(st.Cursor.Line)*lh - st.ScrollY
-			cx := textX + st.Measurer.XForColumn(
-				buf.Line(st.Cursor.Line), st.Cursor.ByteCol)
-			dc.FilledRect(cx, cy, 1, lh, monoStyle.Color)
+		// Draw all cursors.
+		for ci := range st.Cursors {
+			cs := &st.Cursors[ci]
+			if cs.Cursor.Line >= first && cs.Cursor.Line <= last {
+				cy := float32(cs.Cursor.Line)*lh - st.ScrollY
+				cx := textX + st.Measurer.XForColumn(
+					buf.Line(cs.Cursor.Line), cs.Cursor.ByteCol)
+				dc.FilledRect(cx, cy, 1, lh, monoStyle.Color)
+			}
 		}
 
 		// Gutter separator.

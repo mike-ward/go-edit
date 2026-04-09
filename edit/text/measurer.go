@@ -8,6 +8,7 @@
 package text
 
 import (
+	"slices"
 	"unicode/utf8"
 
 	"github.com/mike-ward/go-glyph"
@@ -163,14 +164,7 @@ func ExpandTabs(line []byte, tabWidth int) string {
 		tabWidth = DefaultTabWidth
 	}
 	// Fast path: no tabs.
-	hasTabs := false
-	for _, b := range line {
-		if b == '\t' {
-			hasTabs = true
-			break
-		}
-	}
-	if !hasTabs {
+	if !slices.Contains(line, '\t') {
 		return string(line)
 	}
 	var out []byte
@@ -197,14 +191,7 @@ func ExpandTabsSpan(span []byte, startVCol, tabWidth int) string {
 	if tabWidth <= 0 {
 		tabWidth = DefaultTabWidth
 	}
-	hasTabs := false
-	for _, b := range span {
-		if b == '\t' {
-			hasTabs = true
-			break
-		}
-	}
-	if !hasTabs {
+	if !slices.Contains(span, '\t') {
 		return string(span)
 	}
 	var out []byte

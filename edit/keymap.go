@@ -22,6 +22,10 @@ type Action struct {
 	// (select.*) set this. All other actions auto-set
 	// Anchor = Cursor after execution.
 	PreservesAnchor bool
+	// PerCursor, when true, causes the dispatch loop to execute
+	// this action independently on every cursor. Edit actions
+	// run in reverse position order to avoid position invalidation.
+	PerCursor bool
 }
 
 // Binding maps a key chord to an action ID.

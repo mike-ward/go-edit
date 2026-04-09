@@ -71,30 +71,50 @@ func editorOnClick(
 
 		switch st.ClickCount {
 		case 2: // double-click: word select
+			collapseToPrimary(&st)
+			p := st.primary()
 			line := cfg.Buffer.Line(pos.Line)
 			start, end := wordBoundsAtByte(line, pos.ByteCol)
-			st.Anchor = buffer.Position{Line: pos.Line, ByteCol: start}
-			st.Cursor = buffer.Position{Line: pos.Line, ByteCol: end}
+			p.Anchor = buffer.Position{Line: pos.Line, ByteCol: start}
+			p.Cursor = buffer.Position{Line: pos.Line, ByteCol: end}
+			p.DesiredCol = p.Cursor.ByteCol
 		case 3: // triple-click: line select
+			collapseToPrimary(&st)
+			p := st.primary()
 			lineLen := len(cfg.Buffer.Line(pos.Line))
-			st.Anchor = buffer.Position{Line: pos.Line, ByteCol: 0}
-			st.Cursor = buffer.Position{Line: pos.Line, ByteCol: lineLen}
+			p.Anchor = buffer.Position{Line: pos.Line, ByteCol: 0}
+			p.Cursor = buffer.Position{Line: pos.Line, ByteCol: lineLen}
+			p.DesiredCol = p.Cursor.ByteCol
 		default: // single click
-			if e.Modifiers.Has(gui.ModShift) {
-				// Shift-click extends selection.
-				st.Cursor = pos
+			if e.Modifiers.Has(gui.ModAlt) {
+				// Alt-click adds a cursor.
+				addCursor(&st, CursorState{
+					Cursor:     pos,
+					Anchor:     pos,
+					DesiredCol: pos.ByteCol,
+				})
+			} else if e.Modifiers.Has(gui.ModShift) {
+				// Shift-click extends primary selection,
+				// drops secondary cursors.
+				collapseToPrimary(&st)
+				p := st.primary()
+				p.Cursor = pos
+				p.DesiredCol = pos.ByteCol
 			} else {
-				st.Cursor = pos
-				st.Anchor = pos
+				// Regular click: collapse to single cursor.
+				collapseToPrimary(&st)
+				p := st.primary()
+				p.Cursor = pos
+				p.Anchor = pos
+				p.DesiredCol = pos.ByteCol
 			}
 		}
 
-		st.DesiredCol = st.Cursor.ByteCol
 		ensureCursorVisible(&st, frame, cfg.Height)
 		storeState(w, cfg.IDFocus, st)
 
-		// Start drag via MouseLock for single clicks.
-		if st.ClickCount == 1 {
+		// Start drag via MouseLock for single clicks (not alt-click).
+		if st.ClickCount == 1 && !e.Modifiers.Has(gui.ModAlt) {
 			w.MouseLock(gui.MouseLockCfg{
 				MouseMove: editorDragMove(cfg, frame),
 				MouseUp:   editorDragUp(),
@@ -115,8 +135,9 @@ func editorDragMove(
 			return
 		}
 		st := loadState(w, cfg.IDFocus)
-		st.Cursor = hitTestPosition(e, frame, cfg.Buffer)
-		st.DesiredCol = st.Cursor.ByteCol
+		p := st.primary()
+		p.Cursor = hitTestPosition(e, frame, cfg.Buffer)
+		p.DesiredCol = p.Cursor.ByteCol
 		ensureCursorVisible(&st, frame, cfg.Height)
 		storeState(w, cfg.IDFocus, st)
 	}

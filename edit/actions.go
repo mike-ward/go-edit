@@ -16,49 +16,58 @@ var defaultActions = map[string]Action{
 	// ---- cursor movement ----
 
 	"cursor.left": {
-		ID: "cursor.left",
+		ID:        "cursor.left",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			if hasSelection(st) {
-				st.Cursor = selectionRange(st).Start
+			p := st.primary()
+			if p.HasSelection() {
+				p.Cursor = p.SelectionRange().Start
 				return
 			}
-			moveLeft(st, buf)
+			moveLeft(p, buf)
 		},
 	},
 	"cursor.right": {
-		ID: "cursor.right",
+		ID:        "cursor.right",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			if hasSelection(st) {
-				st.Cursor = selectionRange(st).End
+			p := st.primary()
+			if p.HasSelection() {
+				p.Cursor = p.SelectionRange().End
 				return
 			}
-			moveRight(st, buf)
+			moveRight(p, buf)
 		},
 	},
 	"cursor.up": {
-		ID: "cursor.up",
+		ID:        "cursor.up",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveUp(st, buf, 1)
+			moveUp(st.primary(), buf, 1)
 		},
 		PreservesDesiredCol: true,
 	},
 	"cursor.down": {
-		ID: "cursor.down",
+		ID:        "cursor.down",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveDown(st, buf, 1)
+			moveDown(st.primary(), buf, 1)
 		},
 		PreservesDesiredCol: true,
 	},
 	"cursor.home": {
-		ID: "cursor.home",
+		ID:        "cursor.home",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, _ *buffer.Buffer, _ *gui.Window) {
-			st.Cursor.ByteCol = 0
+			st.primary().Cursor.ByteCol = 0
 		},
 	},
 	"cursor.end": {
-		ID: "cursor.end",
+		ID:        "cursor.end",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			st.Cursor.ByteCol = len(buf.Line(st.Cursor.Line))
+			p := st.primary()
+			p.Cursor.ByteCol = len(buf.Line(p.Cursor.Line))
 		},
 	},
 
@@ -66,55 +75,63 @@ var defaultActions = map[string]Action{
 
 	"select.left": {
 		ID:              "select.left",
+		PerCursor:       true,
 		PreservesAnchor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveLeft(st, buf)
+			moveLeft(st.primary(), buf)
 		},
 	},
 	"select.right": {
 		ID:              "select.right",
+		PerCursor:       true,
 		PreservesAnchor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveRight(st, buf)
+			moveRight(st.primary(), buf)
 		},
 	},
 	"select.up": {
 		ID:                  "select.up",
+		PerCursor:           true,
 		PreservesAnchor:     true,
 		PreservesDesiredCol: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveUp(st, buf, 1)
+			moveUp(st.primary(), buf, 1)
 		},
 	},
 	"select.down": {
 		ID:                  "select.down",
+		PerCursor:           true,
 		PreservesAnchor:     true,
 		PreservesDesiredCol: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveDown(st, buf, 1)
+			moveDown(st.primary(), buf, 1)
 		},
 	},
 	"select.home": {
 		ID:              "select.home",
+		PerCursor:       true,
 		PreservesAnchor: true,
 		Execute: func(_ EditorCfg, st *editorState, _ *buffer.Buffer, _ *gui.Window) {
-			st.Cursor.ByteCol = 0
+			st.primary().Cursor.ByteCol = 0
 		},
 	},
 	"select.end": {
 		ID:              "select.end",
+		PerCursor:       true,
 		PreservesAnchor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			st.Cursor.ByteCol = len(buf.Line(st.Cursor.Line))
+			p := st.primary()
+			p.Cursor.ByteCol = len(buf.Line(p.Cursor.Line))
 		},
 	},
 	"select.all": {
 		ID:              "select.all",
 		PreservesAnchor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			st.Anchor = buffer.Position{}
+			p := st.primary()
+			p.Anchor = buffer.Position{}
 			lastLine := buf.LineCount() - 1
-			st.Cursor = buffer.Position{
+			p.Cursor = buffer.Position{
 				Line:    lastLine,
 				ByteCol: len(buf.Line(lastLine)),
 			}
@@ -124,34 +141,39 @@ var defaultActions = map[string]Action{
 	// ---- editing ----
 
 	"edit.backspace": {
-		ID: "edit.backspace",
+		ID:        "edit.backspace",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			if hasSelection(st) {
+			p := st.primary()
+			if p.HasSelection() {
 				buf.BeginGroup()
-				deleteSelection(st, buf)
+				deleteCursorSelection(p, buf)
 				buf.EndGroup()
 				return
 			}
-			backspace(st, buf)
+			backspace(p, buf)
 		},
 	},
 	"edit.delete": {
-		ID: "edit.delete",
+		ID:        "edit.delete",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			if hasSelection(st) {
+			p := st.primary()
+			if p.HasSelection() {
 				buf.BeginGroup()
-				deleteSelection(st, buf)
+				deleteCursorSelection(p, buf)
 				buf.EndGroup()
 				return
 			}
-			deleteForward(st, buf)
+			deleteForward(p, buf)
 		},
 	},
 	"edit.newline": {
-		ID: "edit.newline",
+		ID:        "edit.newline",
+		PerCursor: true,
 		Execute: func(cfg EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
 			buf.BeginGroup()
-			insertNewline(cfg, st, buf)
+			insertNewline(cfg, st.primary(), buf)
 			buf.EndGroup()
 		},
 	},
@@ -160,8 +182,7 @@ var defaultActions = map[string]Action{
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
 			r := buf.Undo()
 			if r.OK {
-				st.Cursor = r.Cursor.Cursor
-				st.Anchor = r.Cursor.Anchor
+				restoreCursorsFromUndo(st, r.Cursor)
 			}
 		},
 	},
@@ -170,8 +191,7 @@ var defaultActions = map[string]Action{
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
 			r := buf.Redo()
 			if r.OK {
-				st.Cursor = r.Cursor.Cursor
-				st.Anchor = r.Cursor.Anchor
+				restoreCursorsFromUndo(st, r.Cursor)
 			}
 		},
 	},
@@ -181,23 +201,22 @@ var defaultActions = map[string]Action{
 	"edit.copy": {
 		ID: "edit.copy",
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, w *gui.Window) {
-			if !hasSelection(st) {
-				return
+			text := collectSelections(st, buf)
+			if len(text) > 0 {
+				w.SetClipboard(text)
 			}
-			w.SetClipboard(buf.TextInRange(selectionRange(st)))
 		},
 		PreservesAnchor: true,
 	},
 	"edit.cut": {
 		ID: "edit.cut",
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, w *gui.Window) {
-			if !hasSelection(st) {
+			text := collectSelections(st, buf)
+			if len(text) == 0 {
 				return
 			}
-			w.SetClipboard(buf.TextInRange(selectionRange(st)))
-			buf.BeginGroup()
-			deleteSelection(st, buf)
-			buf.EndGroup()
+			w.SetClipboard(text)
+			multiCursorDeleteSelections(st, buf)
 		},
 	},
 	"edit.paste": {
@@ -207,34 +226,72 @@ var defaultActions = map[string]Action{
 			if len(text) == 0 {
 				return
 			}
-			// Cap paste at MaxLoadBytes to prevent OOM from a
-			// pathological clipboard.
 			if len(text) > buffer.MaxLoadBytes {
 				text = text[:buffer.MaxLoadBytes]
 			}
-			buf.BeginGroup()
-			deleteSelection(st, buf)
-			pos := st.Cursor
-			c := buf.Apply(buffer.Edit{
-				Range:    buffer.Range{Start: pos, End: pos},
-				NewBytes: []byte(text),
+			multiCursorPaste(st, buf, text)
+		},
+	},
+
+	// ---- multi-cursor ----
+
+	"cursor.addNext": {
+		ID:              "cursor.addNext",
+		PreservesAnchor: true,
+		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
+			p := st.primary()
+			if !p.HasSelection() {
+				// First press: select word under cursor.
+				line := buf.Line(p.Cursor.Line)
+				start, end := wordBoundsAtByte(line, p.Cursor.ByteCol)
+				p.Anchor = buffer.Position{
+					Line: p.Cursor.Line, ByteCol: start,
+				}
+				p.Cursor = buffer.Position{
+					Line: p.Cursor.Line, ByteCol: end,
+				}
+				return
+			}
+			// Find next occurrence of the selected text.
+			needle := []byte(buf.TextInRange(p.SelectionRange()))
+			// Search from the last cursor's position.
+			last := st.Cursors[len(st.Cursors)-1]
+			found, ok := findNext(buf, needle, last.Cursor)
+			if !ok {
+				return
+			}
+			addCursor(st, CursorState{
+				Cursor:     found.End,
+				Anchor:     found.Start,
+				DesiredCol: found.End.ByteCol,
 			})
-			st.Cursor = c.AppliedRange.End
-			buf.EndGroup()
+		},
+	},
+	"cursor.escape": {
+		ID: "cursor.escape",
+		Execute: func(_ EditorCfg, st *editorState, _ *buffer.Buffer, _ *gui.Window) {
+			if len(st.Cursors) > 1 {
+				collapseToPrimary(st)
+			} else {
+				// Single cursor: clear selection.
+				st.primary().ClearSelection()
+			}
 		},
 	},
 
 	// ---- indent ----
 
 	"edit.indent": {
-		ID: "edit.indent",
+		ID:        "edit.indent",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
 			indentAction(st, buf)
 		},
 		PreservesAnchor: true,
 	},
 	"edit.dedent": {
-		ID: "edit.dedent",
+		ID:        "edit.dedent",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
 			dedentAction(st, buf)
 		},
@@ -246,9 +303,10 @@ var defaultActions = map[string]Action{
 // height, so they're registered separately as closures.
 func pageUpAction(cfg EditorCfg, frame *editorFrameData) Action {
 	return Action{
-		ID: "cursor.pageup",
+		ID:        "cursor.pageup",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveUp(st, buf, pageLines(frame, cfg.Height))
+			moveUp(st.primary(), buf, pageLines(frame, cfg.Height))
 		},
 		PreservesDesiredCol: true,
 	}
@@ -256,9 +314,10 @@ func pageUpAction(cfg EditorCfg, frame *editorFrameData) Action {
 
 func pageDownAction(cfg EditorCfg, frame *editorFrameData) Action {
 	return Action{
-		ID: "cursor.pagedown",
+		ID:        "cursor.pagedown",
+		PerCursor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveDown(st, buf, pageLines(frame, cfg.Height))
+			moveDown(st.primary(), buf, pageLines(frame, cfg.Height))
 		},
 		PreservesDesiredCol: true,
 	}
@@ -268,9 +327,10 @@ func pageDownAction(cfg EditorCfg, frame *editorFrameData) Action {
 func selectPageUpAction(cfg EditorCfg, frame *editorFrameData) Action {
 	return Action{
 		ID:              "select.pageup",
+		PerCursor:       true,
 		PreservesAnchor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveUp(st, buf, pageLines(frame, cfg.Height))
+			moveUp(st.primary(), buf, pageLines(frame, cfg.Height))
 		},
 		PreservesDesiredCol: true,
 	}
@@ -279,9 +339,10 @@ func selectPageUpAction(cfg EditorCfg, frame *editorFrameData) Action {
 func selectPageDownAction(cfg EditorCfg, frame *editorFrameData) Action {
 	return Action{
 		ID:              "select.pagedown",
+		PerCursor:       true,
 		PreservesAnchor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveDown(st, buf, pageLines(frame, cfg.Height))
+			moveDown(st.primary(), buf, pageLines(frame, cfg.Height))
 		},
 		PreservesDesiredCol: true,
 	}

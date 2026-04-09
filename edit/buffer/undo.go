@@ -2,12 +2,21 @@ package buffer
 
 import "time"
 
+// CursorPair holds a cursor and anchor position for one cursor
+// in a multi-cursor undo record.
+type CursorPair struct {
+	Cursor Position
+	Anchor Position
+}
+
 // UndoCursorState captures cursor and selection anchor for undo
 // restore. Opaque to the buffer package; set by the editor layer
-// via SetUndoCursor before Apply.
+// via SetUndoCursor before Apply. Extra holds additional cursors
+// beyond the primary; nil for single-cursor edits.
 type UndoCursorState struct {
 	Cursor Position
 	Anchor Position
+	Extra  []CursorPair // additional cursors; nil = single cursor
 }
 
 // UndoResult is returned by Undo/Redo.
@@ -48,9 +57,9 @@ const maxGroupNesting = 64
 type undoStack struct {
 	undo     []undoEntry
 	redo     []undoEntry
-	grouping int       // >0 → inside BeginGroup/EndGroup
-	pending  []Change  // changes during current group
-	cleanIdx int       // len(undo) at last MarkClean; -1 = never
+	grouping int      // >0 → inside BeginGroup/EndGroup
+	pending  []Change // changes during current group
+	cleanIdx int      // len(undo) at last MarkClean; -1 = never
 	now      func() time.Time
 
 	// Cursor state set by the editor layer before Apply.
@@ -120,6 +129,22 @@ func (b *Buffer) SetUndoCursor(cursor, anchor Position) {
 		return
 	}
 	b.undo.curBefore = UndoCursorState{Cursor: cursor, Anchor: anchor}
+	b.undo.hasCurBefore = true
+}
+
+// maxUndoCursors caps the number of cursor pairs stored per undo
+// entry. Prevents unbounded memory growth from pathological input.
+const maxUndoCursors = 1024
+
+// SetUndoCursorState records full multi-cursor state before Apply.
+func (b *Buffer) SetUndoCursorState(state UndoCursorState) {
+	if b.undo == nil {
+		return
+	}
+	if len(state.Extra) > maxUndoCursors {
+		state.Extra = state.Extra[:maxUndoCursors]
+	}
+	b.undo.curBefore = state
 	b.undo.hasCurBefore = true
 }
 

@@ -6,37 +6,47 @@ import (
 	"github.com/mike-ward/go-edit/edit/buffer"
 )
 
-// ---------- clampCursor ----------
+// ---------- clampCursors ----------
 
-func TestClampCursor_LineOOB(t *testing.T) {
-	st := editorState{Cursor: buffer.Position{Line: 99, ByteCol: 0}}
-	clampCursor(&st, mkBuf("a\nb\nc"))
-	if st.Cursor.Line != 2 {
-		t.Errorf("Line=%d want 2", st.Cursor.Line)
+func TestClampCursors_LineOOB(t *testing.T) {
+	st := editorState{Cursors: []CursorState{
+		{Cursor: buffer.Position{Line: 99}},
+	}}
+	clampCursors(&st, mkBuf("a\nb\nc"))
+	if st.Cursors[0].Cursor.Line != 2 {
+		t.Errorf("Line=%d want 2", st.Cursors[0].Cursor.Line)
 	}
 }
 
-func TestClampCursor_ColOOB(t *testing.T) {
-	st := editorState{Cursor: buffer.Position{Line: 0, ByteCol: 99}}
-	clampCursor(&st, mkBuf("abc"))
-	if st.Cursor.ByteCol != 3 {
-		t.Errorf("ByteCol=%d want 3", st.Cursor.ByteCol)
+func TestClampCursors_ColOOB(t *testing.T) {
+	st := editorState{Cursors: []CursorState{
+		{Cursor: buffer.Position{Line: 0, ByteCol: 99}},
+	}}
+	clampCursors(&st, mkBuf("abc"))
+	if st.Cursors[0].Cursor.ByteCol != 3 {
+		t.Errorf("ByteCol=%d want 3", st.Cursors[0].Cursor.ByteCol)
 	}
 }
 
-func TestClampCursor_NegativeCursor(t *testing.T) {
-	st := editorState{Cursor: buffer.Position{Line: -5, ByteCol: -3}}
-	clampCursor(&st, mkBuf("abc"))
-	if st.Cursor.Line != 0 || st.Cursor.ByteCol != 0 {
-		t.Errorf("got %+v", st.Cursor)
+func TestClampCursors_NegativeCursor(t *testing.T) {
+	st := editorState{Cursors: []CursorState{
+		{Cursor: buffer.Position{Line: -5, ByteCol: -3}},
+	}}
+	clampCursors(&st, mkBuf("abc"))
+	cs := st.Cursors[0]
+	if cs.Cursor.Line != 0 || cs.Cursor.ByteCol != 0 {
+		t.Errorf("got %+v", cs.Cursor)
 	}
 }
 
-func TestClampCursor_EmptyBuffer(t *testing.T) {
-	st := editorState{Cursor: buffer.Position{Line: 3, ByteCol: 7}}
-	clampCursor(&st, buffer.New())
-	if st.Cursor.Line != 0 || st.Cursor.ByteCol != 0 {
-		t.Errorf("got %+v", st.Cursor)
+func TestClampCursors_EmptyBuffer(t *testing.T) {
+	st := editorState{Cursors: []CursorState{
+		{Cursor: buffer.Position{Line: 3, ByteCol: 7}},
+	}}
+	clampCursors(&st, buffer.New())
+	cs := st.Cursors[0]
+	if cs.Cursor.Line != 0 || cs.Cursor.ByteCol != 0 {
+		t.Errorf("got %+v", cs.Cursor)
 	}
 }
 
@@ -115,18 +125,18 @@ func TestAcceptChar_RejectsControl(t *testing.T) {
 // ---------- movement edges ----------
 
 func TestMoveUp_AtTop(t *testing.T) {
-	st := mkState(0, 2)
-	moveUp(&st, mkBuf("abc\ndef"), 1)
-	if st.Cursor.Line != 0 {
-		t.Errorf("Line=%d want 0", st.Cursor.Line)
+	cs := mkCursor(0, 2)
+	moveUp(&cs, mkBuf("abc\ndef"), 1)
+	if cs.Cursor.Line != 0 {
+		t.Errorf("Line=%d want 0", cs.Cursor.Line)
 	}
 }
 
 func TestMoveDown_AtBottom(t *testing.T) {
-	st := mkState(1, 2)
-	moveDown(&st, mkBuf("abc\ndef"), 1)
-	if st.Cursor.Line != 1 {
-		t.Errorf("Line=%d want 1 (clamped)", st.Cursor.Line)
+	cs := mkCursor(1, 2)
+	moveDown(&cs, mkBuf("abc\ndef"), 1)
+	if cs.Cursor.Line != 1 {
+		t.Errorf("Line=%d want 1 (clamped)", cs.Cursor.Line)
 	}
 }
 
@@ -134,17 +144,17 @@ func TestMoveDown_AtBottom(t *testing.T) {
 
 func TestBackspace_EmptyBufferNoop(t *testing.T) {
 	buf := buffer.New()
-	st := mkState(0, 0)
-	backspace(&st, buf)
-	if buf.String() != "" || st.Cursor != (buffer.Position{}) {
-		t.Errorf("content=%q cursor=%+v", buf.String(), st.Cursor)
+	cs := mkCursor(0, 0)
+	backspace(&cs, buf)
+	if buf.String() != "" || cs.Cursor != (buffer.Position{}) {
+		t.Errorf("content=%q cursor=%+v", buf.String(), cs.Cursor)
 	}
 }
 
 func TestDeleteForward_EmptyBufferNoop(t *testing.T) {
 	buf := buffer.New()
-	st := mkState(0, 0)
-	deleteForward(&st, buf)
+	cs := mkCursor(0, 0)
+	deleteForward(&cs, buf)
 	if buf.String() != "" {
 		t.Errorf("content=%q", buf.String())
 	}
@@ -152,34 +162,34 @@ func TestDeleteForward_EmptyBufferNoop(t *testing.T) {
 
 func TestInsertNewline_AtLineStart(t *testing.T) {
 	buf := mkBuf("hello")
-	st := mkState(0, 0)
-	insertNewline(EditorCfg{Buffer: buf}, &st, buf)
+	cs := mkCursor(0, 0)
+	insertNewline(EditorCfg{Buffer: buf}, &cs, buf)
 	if buf.String() != "\nhello" {
 		t.Errorf("content=%q", buf.String())
 	}
-	if st.Cursor.Line != 1 || st.Cursor.ByteCol != 0 {
-		t.Errorf("cursor=%+v", st.Cursor)
+	if cs.Cursor.Line != 1 || cs.Cursor.ByteCol != 0 {
+		t.Errorf("cursor=%+v", cs.Cursor)
 	}
 }
 
 func TestInsertNewline_AtLineEnd(t *testing.T) {
 	buf := mkBuf("hello")
-	st := mkState(0, 5)
-	insertNewline(EditorCfg{Buffer: buf}, &st, buf)
+	cs := mkCursor(0, 5)
+	insertNewline(EditorCfg{Buffer: buf}, &cs, buf)
 	if buf.String() != "hello\n" {
 		t.Errorf("content=%q", buf.String())
 	}
-	if st.Cursor.Line != 1 || st.Cursor.ByteCol != 0 {
-		t.Errorf("cursor=%+v", st.Cursor)
+	if cs.Cursor.Line != 1 || cs.Cursor.ByteCol != 0 {
+		t.Errorf("cursor=%+v", cs.Cursor)
 	}
 }
 
 // ---------- ensureCursorVisible edges ----------
 
 func TestEnsureCursorVisible_TinyViewport(t *testing.T) {
-	// Viewport smaller than a line: cursor should still resolve to
-	// a non-negative scroll.
-	st := editorState{Cursor: buffer.Position{Line: 5, ByteCol: 0}}
+	st := editorState{Cursors: []CursorState{
+		{Cursor: buffer.Position{Line: 5}},
+	}}
 	fr := &editorFrameData{lineHeight: 10, valid: true}
 	ensureCursorVisible(&st, fr, 5)
 	if st.ScrollY < 0 {
@@ -188,7 +198,12 @@ func TestEnsureCursorVisible_TinyViewport(t *testing.T) {
 }
 
 func TestEnsureCursorVisible_InvalidFrame(t *testing.T) {
-	st := editorState{Cursor: buffer.Position{Line: 10, ByteCol: 0}, ScrollY: 7}
+	st := editorState{
+		Cursors: []CursorState{
+			{Cursor: buffer.Position{Line: 10}},
+		},
+		ScrollY: 7,
+	}
 	fr := &editorFrameData{lineHeight: 10, valid: false}
 	ensureCursorVisible(&st, fr, 100)
 	if st.ScrollY != 7 {

@@ -70,6 +70,28 @@ func (d *driver) state() editorState {
 	return loadState(d.w, d.cfg.IDFocus)
 }
 
+// cursor returns the primary cursor state for test assertions.
+func (d *driver) cursor() CursorState {
+	return d.state().Cursors[0]
+}
+
+// addCursorAt adds a cursor at the given position for multi-cursor
+// testing.
+func (d *driver) addCursorAt(line, col int) {
+	st := loadState(d.w, d.cfg.IDFocus)
+	addCursor(&st, CursorState{
+		Cursor:     buffer.Position{Line: line, ByteCol: col},
+		Anchor:     buffer.Position{Line: line, ByteCol: col},
+		DesiredCol: col,
+	})
+	storeState(d.w, d.cfg.IDFocus, st)
+}
+
+// cursorCount returns the number of active cursors.
+func (d *driver) cursorCount() int {
+	return len(d.state().Cursors)
+}
+
 // ---------- tests ----------
 
 func TestDriver_TypeSequenceUpdatesBuffer(t *testing.T) {
@@ -83,8 +105,8 @@ func TestDriver_TypeSequenceUpdatesBuffer(t *testing.T) {
 	if buf.String() != "hello" {
 		t.Errorf("buffer=%q", buf.String())
 	}
-	if d.state().Cursor.ByteCol != 5 {
-		t.Errorf("col=%d", d.state().Cursor.ByteCol)
+	if d.cursor().Cursor.ByteCol != 5 {
+		t.Errorf("col=%d", d.cursor().Cursor.ByteCol)
 	}
 }
 
@@ -128,7 +150,7 @@ func TestDriver_ArrowsNavigate(t *testing.T) {
 	d.sendKey(gui.KeyRight)
 	d.sendKey(gui.KeyRight)
 	d.sendKey(gui.KeyDown)
-	s := d.state()
+	s := d.cursor()
 	if s.Cursor.Line != 1 || s.Cursor.ByteCol != 2 {
 		t.Errorf("cursor=%+v want {1 2}", s.Cursor)
 	}
@@ -176,8 +198,8 @@ func TestDriver_ExternalBufferTruncateHealsCursor(t *testing.T) {
 	for range 4 {
 		d.sendKey(gui.KeyDown)
 	}
-	if d.state().Cursor.Line != 4 {
-		t.Fatalf("setup: cursor=%+v", d.state().Cursor)
+	if d.cursor().Cursor.Line != 4 {
+		t.Fatalf("setup: cursor=%+v", d.cursor().Cursor)
 	}
 	// Externally truncate buffer: replace everything with "x".
 	buf.Apply(buffer.Edit{
@@ -189,7 +211,7 @@ func TestDriver_ExternalBufferTruncateHealsCursor(t *testing.T) {
 	})
 	// Tick amend — should clamp cursor to line 0 without panic.
 	d.tick()
-	s := d.state()
+	s := d.cursor()
 	if s.Cursor.Line != 0 || s.Cursor.ByteCol > 1 {
 		t.Errorf("cursor=%+v want {0,<=1}", s.Cursor)
 	}
@@ -221,7 +243,7 @@ func TestDriver_ShiftRightExtendsSelection(t *testing.T) {
 	})
 	d.sendKeyMod(gui.KeyRight, gui.ModShift)
 	d.sendKeyMod(gui.KeyRight, gui.ModShift)
-	s := d.state()
+	s := d.cursor()
 	if s.Anchor != (buffer.Position{}) {
 		t.Errorf("anchor=%+v want {0 0}", s.Anchor)
 	}
@@ -240,7 +262,7 @@ func TestDriver_RightCollapsesSelection(t *testing.T) {
 	d.sendKeyMod(gui.KeyRight, gui.ModShift)
 	// Right arrow collapses to end of selection.
 	d.sendKey(gui.KeyRight)
-	s := d.state()
+	s := d.cursor()
 	if s.Cursor != (buffer.Position{ByteCol: 2}) {
 		t.Errorf("cursor=%+v want {0 2}", s.Cursor)
 	}
@@ -258,7 +280,7 @@ func TestDriver_LeftCollapsesSelectionToStart(t *testing.T) {
 	d.sendKeyMod(gui.KeyRight, gui.ModShift)
 	d.sendKeyMod(gui.KeyRight, gui.ModShift)
 	d.sendKey(gui.KeyLeft)
-	s := d.state()
+	s := d.cursor()
 	if s.Cursor != (buffer.Position{}) {
 		t.Errorf("cursor=%+v want {0 0}", s.Cursor)
 	}
@@ -270,7 +292,7 @@ func TestDriver_ShiftDownMultiLineSelection(t *testing.T) {
 		IDFocus: 13, Buffer: buf, Width: 400, Height: 200,
 	})
 	d.sendKeyMod(gui.KeyDown, gui.ModShift)
-	s := d.state()
+	s := d.cursor()
 	if s.Anchor != (buffer.Position{}) {
 		t.Errorf("anchor=%+v", s.Anchor)
 	}
@@ -314,7 +336,7 @@ func TestDriver_SelectAll(t *testing.T) {
 		IDFocus: 16, Buffer: buf, Width: 400, Height: 200,
 	})
 	d.sendKeyMod(gui.KeyA, gui.ModCtrl)
-	s := d.state()
+	s := d.cursor()
 	if s.Anchor != (buffer.Position{}) {
 		t.Errorf("anchor=%+v", s.Anchor)
 	}
@@ -472,7 +494,7 @@ func TestDriver_ClickSetsCursor(t *testing.T) {
 	})
 	// Click at x=24 (3 chars * 8px advance) on line 0.
 	d.sendClick(24, 0, 0)
-	s := d.state()
+	s := d.cursor()
 	if s.Cursor.ByteCol != 3 {
 		t.Errorf("cursor=%+v want col 3", s.Cursor)
 	}
@@ -487,7 +509,7 @@ func TestDriver_ClickBeyondLineClamps(t *testing.T) {
 		IDFocus: 28, Buffer: buf, Width: 400, Height: 200,
 	})
 	d.sendClick(400, 0, 0) // way past end of "ab"
-	s := d.state()
+	s := d.cursor()
 	if s.Cursor.ByteCol != 2 {
 		t.Errorf("cursor=%+v want col 2", s.Cursor)
 	}
@@ -512,8 +534,8 @@ func TestDriver_UndoRedoTyping(t *testing.T) {
 	if buf.String() != "" {
 		t.Fatalf("after undo: %q", buf.String())
 	}
-	if d.state().Cursor != (buffer.Position{}) {
-		t.Errorf("cursor after undo: %+v", d.state().Cursor)
+	if d.cursor().Cursor != (buffer.Position{}) {
+		t.Errorf("cursor after undo: %+v", d.cursor().Cursor)
 	}
 	// Redo.
 	d.sendKeyMod(gui.KeyZ, gui.ModCtrl|gui.ModShift)
@@ -643,8 +665,8 @@ func TestDriver_UndoDedentGroup(t *testing.T) {
 	d := newDriver(EditorCfg{
 		IDFocus: 37, Buffer: buf, Width: 400, Height: 200,
 	})
-	d.sendKeyMod(gui.KeyA, gui.ModCtrl)         // select all
-	d.sendKeyMod(gui.KeyTab, gui.ModShift)       // dedent
+	d.sendKeyMod(gui.KeyA, gui.ModCtrl)    // select all
+	d.sendKeyMod(gui.KeyTab, gui.ModShift) // dedent
 	if buf.String() != "aaa\nbbb\nccc" {
 		t.Fatalf("after dedent: %q", buf.String())
 	}
@@ -672,5 +694,232 @@ func TestDriver_UndoTypeOverSelection(t *testing.T) {
 	d.sendKeyMod(gui.KeyZ, gui.ModCtrl)
 	if buf.String() != "hello" {
 		t.Fatalf("after undo type-over: %q", buf.String())
+	}
+}
+
+// ---------- Phase 5: multi-cursor ----------
+
+func TestDriver_MultiCursorTypeChar(t *testing.T) {
+	buf := buffer.FromBytes([]byte("aaa\nbbb\nccc"))
+	buf.EnableUndo(nil)
+	d := newDriver(EditorCfg{
+		IDFocus: 50, Buffer: buf, Width: 400, Height: 200,
+	})
+	// Place primary at (0,0), add cursors at (1,0) and (2,0).
+	d.addCursorAt(1, 0)
+	d.addCursorAt(2, 0)
+	if d.cursorCount() != 3 {
+		t.Fatalf("cursors=%d want 3", d.cursorCount())
+	}
+	d.sendChar('X')
+	if buf.String() != "Xaaa\nXbbb\nXccc" {
+		t.Errorf("buffer=%q", buf.String())
+	}
+}
+
+func TestDriver_MultiCursorBackspace(t *testing.T) {
+	buf := buffer.FromBytes([]byte("Xaaa\nXbbb\nXccc"))
+	buf.EnableUndo(nil)
+	d := newDriver(EditorCfg{
+		IDFocus: 51, Buffer: buf, Width: 400, Height: 200,
+	})
+	// Place cursors at col 1 on each line (after the X).
+	d.sendKey(gui.KeyRight) // primary to (0,1)
+	d.addCursorAt(1, 1)
+	d.addCursorAt(2, 1)
+	d.sendKey(gui.KeyBackspace)
+	if buf.String() != "aaa\nbbb\nccc" {
+		t.Errorf("buffer=%q", buf.String())
+	}
+}
+
+func TestDriver_MultiCursorUndo(t *testing.T) {
+	buf := buffer.FromBytes([]byte("aaa\nbbb\nccc"))
+	buf.EnableUndo(nil)
+	d := newDriver(EditorCfg{
+		IDFocus: 52, Buffer: buf, Width: 400, Height: 200,
+	})
+	d.addCursorAt(1, 0)
+	d.addCursorAt(2, 0)
+	d.sendChar('X')
+	if buf.String() != "Xaaa\nXbbb\nXccc" {
+		t.Fatalf("after type: %q", buf.String())
+	}
+	// Undo should revert all three inserts.
+	d.sendKeyMod(gui.KeyZ, gui.ModCtrl)
+	if buf.String() != "aaa\nbbb\nccc" {
+		t.Errorf("after undo: %q", buf.String())
+	}
+	// Should restore all 3 cursors.
+	if d.cursorCount() != 3 {
+		t.Errorf("cursors after undo=%d want 3", d.cursorCount())
+	}
+}
+
+func TestDriver_MultiCursorMovement(t *testing.T) {
+	buf := buffer.FromBytes([]byte("abcd\nefgh\nijkl"))
+	d := newDriver(EditorCfg{
+		IDFocus: 53, Buffer: buf, Width: 400, Height: 200,
+	})
+	// Two cursors at (0,0) and (2,0).
+	d.addCursorAt(2, 0)
+	d.sendKey(gui.KeyRight)
+	// Both should have moved right.
+	st := d.state()
+	if len(st.Cursors) != 2 {
+		t.Fatalf("cursors=%d", len(st.Cursors))
+	}
+	if st.Cursors[0].Cursor.ByteCol != 1 {
+		t.Errorf("cursor0 col=%d want 1", st.Cursors[0].Cursor.ByteCol)
+	}
+	if st.Cursors[1].Cursor.ByteCol != 1 {
+		t.Errorf("cursor1 col=%d want 1", st.Cursors[1].Cursor.ByteCol)
+	}
+}
+
+func TestDriver_MultiCursorMergesOnOverlap(t *testing.T) {
+	buf := buffer.FromBytes([]byte("abc"))
+	d := newDriver(EditorCfg{
+		IDFocus: 54, Buffer: buf, Width: 400, Height: 200,
+	})
+	// Two cursors at (0,0) and (0,1). Move right → both at (0,1)
+	// and (0,2). Should remain 2 (different positions).
+	d.addCursorAt(0, 1)
+	d.sendKey(gui.KeyRight)
+	if d.cursorCount() != 2 {
+		t.Errorf("cursors=%d want 2", d.cursorCount())
+	}
+	// Move both to end of line → should merge.
+	d.sendKey(gui.KeyEnd)
+	if d.cursorCount() != 1 {
+		t.Errorf("cursors=%d want 1 (merged at EOL)", d.cursorCount())
+	}
+}
+
+func TestDriver_CtrlD_SelectsWord(t *testing.T) {
+	buf := buffer.FromBytes([]byte("hello world"))
+	d := newDriver(EditorCfg{
+		IDFocus: 55, Buffer: buf, Width: 400, Height: 200,
+	})
+	// Cursor at start of "hello". Ctrl+D should select it.
+	d.sendKeyMod(gui.KeyD, gui.ModCtrl)
+	s := d.cursor()
+	if s.Anchor != (buffer.Position{Line: 0, ByteCol: 0}) {
+		t.Errorf("anchor=%+v want (0,0)", s.Anchor)
+	}
+	if s.Cursor != (buffer.Position{Line: 0, ByteCol: 5}) {
+		t.Errorf("cursor=%+v want (0,5)", s.Cursor)
+	}
+}
+
+func TestDriver_CtrlD_FindsNext(t *testing.T) {
+	buf := buffer.FromBytes([]byte("foo bar foo baz foo"))
+	d := newDriver(EditorCfg{
+		IDFocus: 56, Buffer: buf, Width: 400, Height: 200,
+	})
+	// First Ctrl+D selects "foo".
+	d.sendKeyMod(gui.KeyD, gui.ModCtrl)
+	// Second Ctrl+D finds next "foo" and adds cursor.
+	d.sendKeyMod(gui.KeyD, gui.ModCtrl)
+	if d.cursorCount() != 2 {
+		t.Fatalf("cursors=%d want 2", d.cursorCount())
+	}
+	// Third Ctrl+D finds the last "foo".
+	d.sendKeyMod(gui.KeyD, gui.ModCtrl)
+	if d.cursorCount() != 3 {
+		t.Fatalf("cursors=%d want 3", d.cursorCount())
+	}
+}
+
+func TestDriver_Escape_CollapsesCursors(t *testing.T) {
+	buf := buffer.FromBytes([]byte("aaa\nbbb\nccc"))
+	d := newDriver(EditorCfg{
+		IDFocus: 57, Buffer: buf, Width: 400, Height: 200,
+	})
+	d.addCursorAt(1, 0)
+	d.addCursorAt(2, 0)
+	if d.cursorCount() != 3 {
+		t.Fatalf("setup: cursors=%d", d.cursorCount())
+	}
+	d.sendKey(gui.KeyEscape)
+	if d.cursorCount() != 1 {
+		t.Errorf("after escape: cursors=%d want 1", d.cursorCount())
+	}
+}
+
+func TestDriver_Escape_ClearsSelection(t *testing.T) {
+	buf := buffer.FromBytes([]byte("hello"))
+	d := newDriver(EditorCfg{
+		IDFocus: 58, Buffer: buf, Width: 400, Height: 200,
+	})
+	// Select some text.
+	d.sendKeyMod(gui.KeyRight, gui.ModShift)
+	d.sendKeyMod(gui.KeyRight, gui.ModShift)
+	s := d.cursor()
+	if !s.HasSelection() {
+		t.Fatal("should have selection")
+	}
+	d.sendKey(gui.KeyEscape)
+	s = d.cursor()
+	if s.HasSelection() {
+		t.Error("escape should clear selection")
+	}
+}
+
+func TestDriver_MultiCursorCopyPaste(t *testing.T) {
+	buf := buffer.FromBytes([]byte("aaa\nbbb\nccc"))
+	buf.EnableUndo(nil)
+	d := newDriver(EditorCfg{
+		IDFocus: 59, Buffer: buf, Width: 400, Height: 200,
+	})
+	// Select "aaa" on line 0.
+	d.sendKeyMod(gui.KeyRight, gui.ModShift)
+	d.sendKeyMod(gui.KeyRight, gui.ModShift)
+	d.sendKeyMod(gui.KeyRight, gui.ModShift)
+	// Add cursor at (2,0) and select "ccc".
+	d.addCursorAt(2, 0)
+	// For simplicity, manually set selection on second cursor.
+	st := loadState(d.w, d.cfg.IDFocus)
+	st.Cursors[1].Anchor = buffer.Position{Line: 2, ByteCol: 0}
+	st.Cursors[1].Cursor = buffer.Position{Line: 2, ByteCol: 3}
+	storeState(d.w, d.cfg.IDFocus, st)
+
+	d.sendKeyMod(gui.KeyC, gui.ModCtrl) // copy
+	// Clipboard should be "aaa\nccc".
+	d.sendKey(gui.KeyEnd) // collapse selections, cursor at end
+	// Move to end of buffer and paste.
+	d.sendKey(gui.KeyDown)
+	d.sendKey(gui.KeyDown)
+	d.sendKey(gui.KeyEnd)
+	d.sendKeyMod(gui.KeyV, gui.ModCtrl)
+	want := "aaa\nbbb\ncccaaa\nccc"
+	if buf.String() != want {
+		t.Errorf("buffer=%q want %q", buf.String(), want)
+	}
+}
+
+func TestDriver_MultiCursorCut(t *testing.T) {
+	buf := buffer.FromBytes([]byte("Xaa\nXbb\nXcc"))
+	buf.EnableUndo(nil)
+	d := newDriver(EditorCfg{
+		IDFocus: 60, Buffer: buf, Width: 400, Height: 200,
+	})
+	// Select "X" on each line.
+	st := loadState(d.w, d.cfg.IDFocus)
+	st.Cursors = []CursorState{
+		{Cursor: buffer.Position{Line: 0, ByteCol: 1}, Anchor: buffer.Position{Line: 0, ByteCol: 0}},
+		{Cursor: buffer.Position{Line: 1, ByteCol: 1}, Anchor: buffer.Position{Line: 1, ByteCol: 0}},
+		{Cursor: buffer.Position{Line: 2, ByteCol: 1}, Anchor: buffer.Position{Line: 2, ByteCol: 0}},
+	}
+	storeState(d.w, d.cfg.IDFocus, st)
+
+	d.sendKeyMod(gui.KeyX, gui.ModCtrl) // cut
+	if buf.String() != "aa\nbb\ncc" {
+		t.Errorf("buffer=%q want aa\\nbb\\ncc", buf.String())
+	}
+	// Undo should restore.
+	d.sendKeyMod(gui.KeyZ, gui.ModCtrl)
+	if buf.String() != "Xaa\nXbb\nXcc" {
+		t.Errorf("after undo: %q", buf.String())
 	}
 }

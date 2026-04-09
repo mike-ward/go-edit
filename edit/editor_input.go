@@ -61,9 +61,9 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 			gutterW = float32(digits)*advance + 2*advance
 		}
 
-		// Clamp cursor against current buffer size — the buffer
+		// Clamp cursors against current buffer size — the buffer
 		// may have been mutated externally between frames.
-		clampCursor(&st, cfg.Buffer)
+		clampCursors(&st, cfg.Buffer)
 		clampScroll(&st, cfg, lh)
 
 		frame.state = st
@@ -117,19 +117,20 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 
 		// Record cursor before edit for undo (skip for undo/redo
 		// themselves — they restore cursor from their own records).
-		if isEditAction(actionID) && actionID != "edit.undo" &&
+		isEdit := isEditAction(actionID)
+		if isEdit && actionID != "edit.undo" &&
 			actionID != "edit.redo" {
-			cfg.Buffer.SetUndoCursor(st.Cursor, st.Anchor)
+			cfg.Buffer.SetUndoCursorState(buildUndoCursorState(&st))
 		}
 
-		action.Execute(cfg, &st, cfg.Buffer, w)
+		if action.PerCursor && len(st.Cursors) > 1 {
+			dispatchPerCursor(cfg, &st, cfg.Buffer, w, action, isEdit)
+		} else {
+			action.Execute(cfg, &st, cfg.Buffer, w)
+			applyPostAction(&st, action)
+		}
 
-		if !action.PreservesAnchor {
-			st.Anchor = st.Cursor
-		}
-		if !action.PreservesDesiredCol {
-			st.DesiredCol = st.Cursor.ByteCol
-		}
+		sortAndMerge(&st)
 		ensureCursorVisible(&st, frame, cfg.Height)
 		storeState(w, cfg.IDFocus, st)
 		e.IsHandled = true
@@ -149,23 +150,11 @@ func editorOnChar(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.
 		n := utf8.EncodeRune(buf2[:], r)
 
 		st := loadState(w, cfg.IDFocus)
-		cfg.Buffer.SetUndoCursor(st.Cursor, st.Anchor)
-		grouped := hasSelection(&st)
-		if grouped {
-			cfg.Buffer.BeginGroup()
-			deleteSelection(&st, cfg.Buffer)
-		}
-		pos := st.Cursor
-		c := cfg.Buffer.Apply(buffer.Edit{
-			Range:    buffer.Range{Start: pos, End: pos},
-			NewBytes: buf2[:n],
-		})
-		if grouped {
-			cfg.Buffer.EndGroup()
-		}
-		st.Cursor = c.AppliedRange.End
-		clearSelection(&st)
-		st.DesiredCol = st.Cursor.ByteCol
+		cfg.Buffer.SetUndoCursorState(buildUndoCursorState(&st))
+
+		charInsertPerCursor(&st, cfg.Buffer, buf2[:n])
+
+		sortAndMerge(&st)
 		ensureCursorVisible(&st, frame, cfg.Height)
 		storeState(w, cfg.IDFocus, st)
 		e.IsHandled = true
@@ -190,54 +179,54 @@ func editorOnMouseScroll(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout
 
 // ---------- Pure cursor math (testable without *Window) ----------
 
-func moveLeft(st *editorState, buf *buffer.Buffer) {
-	if st.Cursor.ByteCol > 0 {
-		st.Cursor.ByteCol--
+func moveLeft(cs *CursorState, buf *buffer.Buffer) {
+	if cs.Cursor.ByteCol > 0 {
+		cs.Cursor.ByteCol--
 		return
 	}
-	if st.Cursor.Line > 0 {
-		st.Cursor.Line--
-		st.Cursor.ByteCol = len(buf.Line(st.Cursor.Line))
+	if cs.Cursor.Line > 0 {
+		cs.Cursor.Line--
+		cs.Cursor.ByteCol = len(buf.Line(cs.Cursor.Line))
 	}
 }
 
-func moveRight(st *editorState, buf *buffer.Buffer) {
-	line := buf.Line(st.Cursor.Line)
-	if st.Cursor.ByteCol < len(line) {
-		st.Cursor.ByteCol++
+func moveRight(cs *CursorState, buf *buffer.Buffer) {
+	line := buf.Line(cs.Cursor.Line)
+	if cs.Cursor.ByteCol < len(line) {
+		cs.Cursor.ByteCol++
 		return
 	}
-	if st.Cursor.Line < buf.LineCount()-1 {
-		st.Cursor.Line++
-		st.Cursor.ByteCol = 0
+	if cs.Cursor.Line < buf.LineCount()-1 {
+		cs.Cursor.Line++
+		cs.Cursor.ByteCol = 0
 	}
 }
 
-func moveUp(st *editorState, buf *buffer.Buffer, n int) {
-	st.Cursor.Line -= n
-	if st.Cursor.Line < 0 {
-		st.Cursor.Line = 0
+func moveUp(cs *CursorState, buf *buffer.Buffer, n int) {
+	cs.Cursor.Line -= n
+	if cs.Cursor.Line < 0 {
+		cs.Cursor.Line = 0
 	}
-	clampCol(st, buf)
+	clampCol(cs, buf)
 }
 
-func moveDown(st *editorState, buf *buffer.Buffer, n int) {
-	st.Cursor.Line += n
-	if st.Cursor.Line >= buf.LineCount() {
-		st.Cursor.Line = buf.LineCount() - 1
+func moveDown(cs *CursorState, buf *buffer.Buffer, n int) {
+	cs.Cursor.Line += n
+	if cs.Cursor.Line >= buf.LineCount() {
+		cs.Cursor.Line = buf.LineCount() - 1
 	}
-	clampCol(st, buf)
+	clampCol(cs, buf)
 }
 
-func clampCol(st *editorState, buf *buffer.Buffer) {
-	ll := len(buf.Line(st.Cursor.Line))
-	want := st.DesiredCol
+func clampCol(cs *CursorState, buf *buffer.Buffer) {
+	ll := len(buf.Line(cs.Cursor.Line))
+	want := cs.DesiredCol
 	want = min(want, ll)
-	st.Cursor.ByteCol = want
+	cs.Cursor.ByteCol = want
 }
 
-func backspace(st *editorState, buf *buffer.Buffer) {
-	pos := st.Cursor
+func backspace(cs *CursorState, buf *buffer.Buffer) {
+	pos := cs.Cursor
 	if pos.Line == 0 && pos.ByteCol == 0 {
 		return
 	}
@@ -249,11 +238,11 @@ func backspace(st *editorState, buf *buffer.Buffer) {
 		start = buffer.Position{Line: pos.Line - 1, ByteCol: prevLen}
 	}
 	c := buf.Apply(buffer.Edit{Range: buffer.Range{Start: start, End: pos}})
-	st.Cursor = c.AppliedRange.End
+	cs.Cursor = c.AppliedRange.End
 }
 
-func deleteForward(st *editorState, buf *buffer.Buffer) {
-	pos := st.Cursor
+func deleteForward(cs *CursorState, buf *buffer.Buffer) {
+	pos := cs.Cursor
 	lineLen := len(buf.Line(pos.Line))
 	var end buffer.Position
 	if pos.ByteCol < lineLen {
@@ -266,9 +255,9 @@ func deleteForward(st *editorState, buf *buffer.Buffer) {
 	_ = buf.Apply(buffer.Edit{Range: buffer.Range{Start: pos, End: end}})
 }
 
-func insertNewline(cfg EditorCfg, st *editorState, buf *buffer.Buffer) {
-	deleteSelection(st, buf)
-	pos := st.Cursor
+func insertNewline(cfg EditorCfg, cs *CursorState, buf *buffer.Buffer) {
+	deleteCursorSelection(cs, buf)
+	pos := cs.Cursor
 	line := buf.Line(pos.Line)
 
 	// Auto-indent: copy leading whitespace from current line.
@@ -286,8 +275,8 @@ func insertNewline(cfg EditorCfg, st *editorState, buf *buffer.Buffer) {
 		Range:    buffer.Range{Start: pos, End: pos},
 		NewBytes: newBytes,
 	})
-	st.Cursor = c.AppliedRange.End
-	clearSelection(st)
+	cs.Cursor = c.AppliedRange.End
+	cs.ClearSelection()
 }
 
 // acceptChar reports whether r should be inserted into the buffer
@@ -306,12 +295,14 @@ func pageLines(frame *editorFrameData, viewportH float32) int {
 	return n
 }
 
-// clampCursor clamps st.Cursor and st.Anchor to valid coordinates
-// within buf. Called from AmendLayout to recover gracefully from
-// external buffer mutations.
-func clampCursor(st *editorState, buf *buffer.Buffer) {
-	clampPos(&st.Cursor, buf)
-	clampPos(&st.Anchor, buf)
+// clampCursors clamps all cursors to valid coordinates within buf.
+// Called from AmendLayout to recover gracefully from external
+// buffer mutations.
+func clampCursors(st *editorState, buf *buffer.Buffer) {
+	for i := range st.Cursors {
+		clampPos(&st.Cursors[i].Cursor, buf)
+		clampPos(&st.Cursors[i].Anchor, buf)
+	}
 }
 
 func clampPos(p *buffer.Position, buf *buffer.Buffer) {
@@ -359,8 +350,9 @@ func ensureCursorVisible(st *editorState, frame *editorFrameData, viewportH floa
 	if viewportH != viewportH || viewportH <= 0 { // NaN or non-positive
 		return
 	}
+	p := st.primary()
 	lh := frame.lineHeight
-	cy := float32(st.Cursor.Line) * lh
+	cy := float32(p.Cursor.Line) * lh
 	if cy < st.ScrollY {
 		st.ScrollY = cy
 	}

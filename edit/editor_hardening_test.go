@@ -215,7 +215,7 @@ func TestClickBeyondBuffer(t *testing.T) {
 	})
 	// Click way below the buffer (Y beyond last line).
 	d.sendClick(0, 5000, 0)
-	s := d.state()
+	s := d.cursor()
 	if s.Cursor.Line != 0 {
 		t.Errorf("cursor line=%d want 0 (single-line buffer)", s.Cursor.Line)
 	}
@@ -227,5 +227,127 @@ func TestDedentLine_HugeWidth(t *testing.T) {
 	removed := dedentLine(buf, 0)
 	if removed > maxIndentWidth {
 		t.Errorf("removed=%d exceeds cap %d", removed, maxIndentWidth)
+	}
+}
+
+// ---------- Multi-cursor hardening ----------
+
+func TestMultiCursor_ClampAfterExternalTruncate(t *testing.T) {
+	buf := buffer.FromBytes([]byte("aaa\nbbb\nccc"))
+	d := newDriver(EditorCfg{
+		IDFocus: 210, Buffer: buf, Width: 400, Height: 200,
+	})
+	d.addCursorAt(1, 2)
+	d.addCursorAt(2, 2)
+	// Externally truncate to single line.
+	buf.Apply(buffer.Edit{
+		Range: buffer.Range{
+			Start: buffer.Position{},
+			End:   buffer.Position{Line: 2, ByteCol: 3},
+		},
+		NewBytes: []byte("x"),
+	})
+	// Tick should clamp without panic.
+	d.tick()
+	st := d.state()
+	for i, c := range st.Cursors {
+		if c.Cursor.Line != 0 {
+			t.Errorf("cursor %d: line=%d want 0", i, c.Cursor.Line)
+		}
+	}
+}
+
+func TestMultiCursor_RestoreFromUndoCapExtra(t *testing.T) {
+	// Corrupt undo record with more cursors than maxCursors.
+	st := editorState{Cursors: []CursorState{{
+		Cursor: buffer.Position{},
+	}}}
+	huge := make([]buffer.CursorPair, maxCursors+500)
+	for i := range huge {
+		huge[i] = buffer.CursorPair{
+			Cursor: buffer.Position{Line: i},
+		}
+	}
+	ucs := buffer.UndoCursorState{Extra: huge}
+	restoreCursorsFromUndo(&st, ucs)
+	if len(st.Cursors) > maxCursors {
+		t.Errorf("cursors=%d exceeds cap %d", len(st.Cursors), maxCursors)
+	}
+}
+
+func TestFindNext_NegativeFrom(t *testing.T) {
+	buf := buffer.FromBytes([]byte("abc\ndef"))
+	r, ok := findNext(buf, []byte("abc"),
+		buffer.Position{Line: -5, ByteCol: -3})
+	if !ok {
+		t.Fatal("should find 'abc'")
+	}
+	if r.Start.Line != 0 || r.Start.ByteCol != 0 {
+		t.Errorf("range=%+v", r)
+	}
+}
+
+func TestFindNext_FromBeyondBuffer(t *testing.T) {
+	buf := buffer.FromBytes([]byte("abc\ndef"))
+	// from beyond buffer should wrap to start.
+	r, ok := findNext(buf, []byte("abc"),
+		buffer.Position{Line: 999, ByteCol: 0})
+	if !ok {
+		t.Fatal("should find 'abc' after wrap")
+	}
+	if r.Start.Line != 0 {
+		t.Errorf("start=%+v", r.Start)
+	}
+}
+
+func TestShiftPosition_NegativeResult(t *testing.T) {
+	// Pathological: delEnd.ByteCol > p.ByteCol on same line.
+	p := buffer.Position{Line: 0, ByteCol: 2}
+	adjustPos(&p,
+		buffer.Position{Line: 0, ByteCol: 0},  // delStart
+		buffer.Position{Line: 0, ByteCol: 10}, // delEnd (past p)
+		buffer.Position{Line: 0, ByteCol: 0},  // endPos
+	)
+	// p is inside deleted range → collapses to endPos.
+	if p.ByteCol < 0 {
+		t.Errorf("ByteCol=%d negative", p.ByteCol)
+	}
+}
+
+func TestDispatchPerCursor_EmptyCursors(t *testing.T) {
+	// Should not panic on empty cursor slice.
+	st := editorState{Cursors: nil}
+	st.ensureCursors()
+	st.Cursors = st.Cursors[:0] // force empty
+	buf := buffer.New()
+	dispatchPerCursor(EditorCfg{Buffer: buf}, &st, buf, nil,
+		Action{ID: "noop", Execute: func(_ EditorCfg, _ *editorState, _ *buffer.Buffer, _ *gui.Window) {}},
+		false)
+	// No panic = pass.
+}
+
+func TestCharInsertPerCursor_EmptyCursors(t *testing.T) {
+	st := editorState{Cursors: nil}
+	buf := buffer.New()
+	charInsertPerCursor(&st, buf, []byte("x"))
+	// No panic = pass.
+}
+
+func TestMultiCursor_MaxCursorsCap(t *testing.T) {
+	st := editorState{Cursors: []CursorState{
+		{Cursor: buffer.Position{}},
+	}}
+	for i := 1; i < maxCursors; i++ {
+		st.Cursors = append(st.Cursors, CursorState{
+			Cursor: buffer.Position{Line: i},
+			Anchor: buffer.Position{Line: i},
+		})
+	}
+	addCursor(&st, CursorState{
+		Cursor: buffer.Position{Line: maxCursors + 1},
+		Anchor: buffer.Position{Line: maxCursors + 1},
+	})
+	if len(st.Cursors) != maxCursors {
+		t.Errorf("len=%d want %d", len(st.Cursors), maxCursors)
 	}
 }

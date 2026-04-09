@@ -17,16 +17,27 @@ const capEdit = 64
 // editorState is the persistent per-instance state, stored in the
 // window's StateMap across frames.
 type editorState struct {
-	Cursor     buffer.Position
-	Anchor     buffer.Position // selection anchor; Anchor == Cursor → no sel
-	DesiredCol int             // sticky col for Up/Down movement
-	ScrollY    float32         // scroll offset in pixels
-	Measurer   *text.Measurer
+	Cursors  []CursorState // sorted by position; index 0 = primary
+	ScrollY  float32       // scroll offset in pixels
+	Measurer *text.Measurer
 
 	// Mouse click tracking for double/triple-click detection.
 	LastClickTime int64           // UnixMilli of last mouse-down
 	LastClickPos  buffer.Position // position of last click
 	ClickCount    int             // 1=single, 2=double, 3=triple
+}
+
+// primary returns a pointer to the primary cursor (index 0).
+// Caller must ensure Cursors is non-empty (ensureCursors does this).
+func (st *editorState) primary() *CursorState {
+	return &st.Cursors[0]
+}
+
+// ensureCursors guarantees at least one cursor exists.
+func (st *editorState) ensureCursors() {
+	if len(st.Cursors) == 0 {
+		st.Cursors = []CursorState{{}}
+	}
 }
 
 // editorFrameData is the per-frame snapshot shared between the
@@ -44,6 +55,7 @@ type editorFrameData struct {
 func loadState(w *gui.Window, id uint32) editorState {
 	m := gui.StateMap[uint32, editorState](w, nsEdit, capEdit)
 	s, _ := m.Get(id)
+	s.ensureCursors()
 	return s
 }
 

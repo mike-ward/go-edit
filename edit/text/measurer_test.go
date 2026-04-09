@@ -58,15 +58,15 @@ func TestVisualCols(t *testing.T) {
 		tabW    int
 		want    int
 	}{
-		{"hello", 5, 4, 5},            // no tabs
-		{"\thello", 1, 4, 4},          // one tab = 4 cols
-		{"\thello", 6, 4, 9},          // tab(4) + hello(5)
-		{"\t\thello", 2, 4, 8},        // two tabs
-		{"ab\tcd", 3, 4, 4},           // tab at col 2 → next stop at 4
-		{"ab\tcd", 5, 4, 6},           // after tab + cd
-		{"\thello", 1, 8, 8},          // tab width 8
-		{"", 0, 4, 0},                 // empty
-		{"abc\tdef", 4, 4, 4},         // tab at col 3 → stop at 4
+		{"hello", 5, 4, 5},     // no tabs
+		{"\thello", 1, 4, 4},   // one tab = 4 cols
+		{"\thello", 6, 4, 9},   // tab(4) + hello(5)
+		{"\t\thello", 2, 4, 8}, // two tabs
+		{"ab\tcd", 3, 4, 4},    // tab at col 2 → next stop at 4
+		{"ab\tcd", 5, 4, 6},    // after tab + cd
+		{"\thello", 1, 8, 8},   // tab width 8
+		{"", 0, 4, 0},          // empty
+		{"abc\tdef", 4, 4, 4},  // tab at col 3 → stop at 4
 	}
 	for _, c := range cases {
 		got := VisualCols([]byte(c.line), c.byteCol, c.tabW)
@@ -86,11 +86,11 @@ func TestByteColForVisualCol(t *testing.T) {
 	}{
 		{"hello", 3, 4, 3},
 		{"\thello", 0, 4, 0},
-		{"\thello", 4, 4, 1},   // visual col 4 = after tab = byte 1
-		{"\thello", 5, 4, 2},   // visual col 5 = 'e' = byte 2
-		{"\thello", 9, 4, 6},   // past end
-		{"ab\tcd", 4, 4, 3},    // visual col 4 = after tab = byte 3
-		{"", 5, 4, 0},          // empty
+		{"\thello", 4, 4, 1}, // visual col 4 = after tab = byte 1
+		{"\thello", 5, 4, 2}, // visual col 5 = 'e' = byte 2
+		{"\thello", 9, 4, 6}, // past end
+		{"ab\tcd", 4, 4, 3},  // visual col 4 = after tab = byte 3
+		{"", 5, 4, 0},        // empty
 	}
 	for _, c := range cases {
 		got := byteColForVisualCol([]byte(c.line), c.targetVCol, c.tabW)
@@ -141,16 +141,16 @@ func TestExpandTabs(t *testing.T) {
 		tabW int
 		want string
 	}{
-		{"hello", 4, "hello"},              // no tabs
-		{"\thello", 4, "    hello"},         // leading tab
-		{"\t\thello", 4, "        hello"},   // two tabs
-		{"ab\tcd", 4, "ab  cd"},             // mid-line tab (col 2 → stop 4)
-		{"abc\tdef", 4, "abc def"},          // col 3 → stop 4 (1 space)
-		{"abcd\tef", 4, "abcd    ef"},       // col 4 → stop 8 (4 spaces)
-		{"\thello", 8, "        hello"},     // tab width 8
-		{"", 4, ""},                          // empty
-		{"\t", 4, "    "},                    // tab only
-		{"a\tb\tc", 4, "a   b   c"},         // multiple mid-line tabs
+		{"hello", 4, "hello"},             // no tabs
+		{"\thello", 4, "    hello"},       // leading tab
+		{"\t\thello", 4, "        hello"}, // two tabs
+		{"ab\tcd", 4, "ab  cd"},           // mid-line tab (col 2 → stop 4)
+		{"abc\tdef", 4, "abc def"},        // col 3 → stop 4 (1 space)
+		{"abcd\tef", 4, "abcd    ef"},     // col 4 → stop 8 (4 spaces)
+		{"\thello", 8, "        hello"},   // tab width 8
+		{"", 4, ""},                       // empty
+		{"\t", 4, "    "},                 // tab only
+		{"a\tb\tc", 4, "a   b   c"},       // multiple mid-line tabs
 	}
 	for _, c := range cases {
 		got := ExpandTabs([]byte(c.line), c.tabW)
@@ -176,13 +176,13 @@ func TestExpandTabsSpan(t *testing.T) {
 		tabW      int
 		want      string
 	}{
-		{"hello", 0, 4, "hello"},           // no tabs
-		{"\thello", 0, 4, "    hello"},      // tab at vcol 0
-		{"\thello", 2, 4, "  hello"},        // tab at vcol 2 → stop 4 (2 spaces)
-		{"\thello", 3, 4, " hello"},         // tab at vcol 3 → stop 4 (1 space)
-		{"\thello", 4, 4, "    hello"},      // tab at vcol 4 → stop 8 (4 spaces)
-		{"x\ty", 0, 4, "x   y"},            // tab after 1 char
-		{"", 0, 4, ""},                       // empty span
+		{"hello", 0, 4, "hello"},       // no tabs
+		{"\thello", 0, 4, "    hello"}, // tab at vcol 0
+		{"\thello", 2, 4, "  hello"},   // tab at vcol 2 → stop 4 (2 spaces)
+		{"\thello", 3, 4, " hello"},    // tab at vcol 3 → stop 4 (1 space)
+		{"\thello", 4, 4, "    hello"}, // tab at vcol 4 → stop 8 (4 spaces)
+		{"x\ty", 0, 4, "x   y"},        // tab after 1 char
+		{"", 0, 4, ""},                 // empty span
 	}
 	for _, c := range cases {
 		got := ExpandTabsSpan([]byte(c.span), c.startVCol, c.tabW)

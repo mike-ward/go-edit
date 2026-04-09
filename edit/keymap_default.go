@@ -48,6 +48,11 @@ var DefaultKeymap = &Keymap{
 		{Key: gui.KeyTab, ActionID: "edit.indent"},
 		{Key: gui.KeyTab, Modifiers: gui.ModShift, ActionID: "edit.dedent"},
 
+		// ---- multi-cursor ----
+		{Key: gui.KeyD, Modifiers: gui.ModCtrl, ActionID: "cursor.addNext"},
+		{Key: gui.KeyD, Modifiers: gui.ModSuper, ActionID: "cursor.addNext"},
+		{Key: gui.KeyEscape, ActionID: "cursor.escape"},
+
 		// ---- undo / redo ----
 		{Key: gui.KeyZ, Modifiers: gui.ModCtrl, ActionID: "edit.undo"},
 		{Key: gui.KeyZ, Modifiers: gui.ModSuper, ActionID: "edit.undo"},

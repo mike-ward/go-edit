@@ -41,19 +41,20 @@ func leadingWhitespace(line []byte) []byte {
 // prepends an indent to each line in the selection.
 func indentAction(st *editorState, buf *buffer.Buffer) {
 	unit := indentUnit(buf.Props.IndentStyle)
+	p := st.primary()
 
-	if !hasSelection(st) {
-		pos := st.Cursor
+	if !p.HasSelection() {
+		pos := p.Cursor
 		c := buf.Apply(buffer.Edit{
 			Range:    buffer.Range{Start: pos, End: pos},
 			NewBytes: unit,
 		})
-		st.Cursor = c.AppliedRange.End
-		clearSelection(st)
+		p.Cursor = c.AppliedRange.End
+		p.ClearSelection()
 		return
 	}
 
-	sel := selectionRange(st)
+	sel := p.SelectionRange()
 	// Iterate last line → first to avoid invalidating positions.
 	buf.BeginGroup()
 	for li := sel.End.Line; li >= sel.Start.Line; li-- {
@@ -72,40 +73,42 @@ func indentAction(st *editorState, buf *buffer.Buffer) {
 
 	// Adjust anchor/cursor columns on affected lines.
 	w := len(unit)
-	adjustIndent(&st.Anchor, sel, w)
-	adjustIndent(&st.Cursor, sel, w)
+	adjustIndent(&p.Anchor, sel, w)
+	adjustIndent(&p.Cursor, sel, w)
 }
 
 // dedentAction removes one indent unit from the start of the
 // current line (no selection) or each line in the selection.
 func dedentAction(st *editorState, buf *buffer.Buffer) {
-	if !hasSelection(st) {
-		removed := dedentLine(buf, st.Cursor.Line)
-		st.Cursor.ByteCol -= removed
-		if st.Cursor.ByteCol < 0 {
-			st.Cursor.ByteCol = 0
+	p := st.primary()
+
+	if !p.HasSelection() {
+		removed := dedentLine(buf, p.Cursor.Line)
+		p.Cursor.ByteCol -= removed
+		if p.Cursor.ByteCol < 0 {
+			p.Cursor.ByteCol = 0
 		}
-		clearSelection(st)
+		p.ClearSelection()
 		return
 	}
 
-	sel := selectionRange(st)
+	sel := p.SelectionRange()
 	buf.BeginGroup()
 	for li := sel.End.Line; li >= sel.Start.Line; li-- {
 		if li == sel.End.Line && sel.End.ByteCol == 0 && li > sel.Start.Line {
 			continue
 		}
 		removed := dedentLine(buf, li)
-		if st.Anchor.Line == li {
-			st.Anchor.ByteCol -= removed
-			if st.Anchor.ByteCol < 0 {
-				st.Anchor.ByteCol = 0
+		if p.Anchor.Line == li {
+			p.Anchor.ByteCol -= removed
+			if p.Anchor.ByteCol < 0 {
+				p.Anchor.ByteCol = 0
 			}
 		}
-		if st.Cursor.Line == li {
-			st.Cursor.ByteCol -= removed
-			if st.Cursor.ByteCol < 0 {
-				st.Cursor.ByteCol = 0
+		if p.Cursor.Line == li {
+			p.Cursor.ByteCol -= removed
+			if p.Cursor.ByteCol < 0 {
+				p.Cursor.ByteCol = 0
 			}
 		}
 	}

@@ -273,15 +273,43 @@ Architectural notes:
 - [x] Integrate chroma; map chroma token types → theme styles.
 - [x] Per-line token cache; invalidate on edit using line ranges.
 - [x] Lazy tokenize visible viewport first; background fill.
-- [ ] Theme: derive from go-gui theme; override per-token colors.
-      (Currently hardcoded to "monokai". Needs theme bridge.)
 - [x] Language autodetect from filename + content.
 
-### Phase 5 — Multi-cursor  ☐
+### Phase 5 — Multi-cursor  ☑
 
-- [ ] Multiple `Cursor` instances; merge overlapping; sort on edit.
-- [ ] Alt-click add cursor; Ctrl-D add next match; Esc collapse.
-- [ ] All edit ops apply per-cursor in reverse position order.
+- [x] Multiple `Cursor` instances; merge overlapping; sort on edit.
+- [x] Alt-click add cursor; Ctrl-D add next match; Esc collapse.
+- [x] All edit ops apply per-cursor in reverse position order.
+
+Architectural notes:
+
+- Data model: `editorState.Cursors []CursorState` replaces the single
+  `Cursor`/`Anchor`/`DesiredCol` triple. Index 0 is the primary cursor
+  (drives scroll via `ensureCursorVisible`). `CursorState` type in
+  `edit/cursor.go` with `HasSelection`, `SelectionRange`, `ClearSelection`.
+- Sort/merge: `sortCursors` + `mergeCursors` in `edit/multicursor.go`.
+  Called after every action dispatch and mouse event. Overlapping or
+  touching selection ranges merge into their union. Cap at 1000 cursors.
+- Per-cursor dispatch: `PerCursor` flag on `Action`. Per-cursor edit
+  actions register a temporary `PostEditFunc` observer that adjusts all
+  non-active cursors after each `buf.Apply` call, using the same shift
+  logic as `markset.go`. Multi-cursor edits are grouped in one
+  `BeginGroup`/`EndGroup` for atomic undo. Single-cursor char insert
+  stays ungrouped to preserve typing coalesce.
+- Undo: `UndoCursorState` extended with `Extra []CursorPair` to
+  capture all cursors. `SetUndoCursorState` records the full set;
+  undo/redo restores all cursors.
+- Drawing: selection backgrounds and cursor rects iterate all cursors.
+- Mouse: Alt-click adds a cursor (no drag). Regular click collapses
+  to single. Shift-click extends primary, drops secondaries.
+- Ctrl+D (`cursor.addNext`): first press selects word under cursor;
+  subsequent presses search forward (wrapping) for next match and add
+  a cursor selecting it.
+- Escape (`cursor.escape`): collapses to primary cursor; if already
+  single, clears selection.
+- Clipboard: copy concatenates all selections with `\n`; cut does the
+  same then deletes in reverse order. Paste splits by `\n` when line
+  count matches cursor count; otherwise pastes full text at each cursor.
 
 ### Phase 6 — Search / replace  ☐
 
@@ -304,6 +332,8 @@ Architectural notes:
 - [ ] Per-language config (tab width, comment string).
 - [ ] Diagnostics gutter API (markers, squiggles) — no LSP yet, just an API
       surface for callers to push markers.
+- [ ] Theme: derive from go-gui theme; override per-token colors.
+      (Currently hardcoded to "monokai". Needs theme bridge.)
 - [ ] Accessibility: a11y tree integration via go-gui NativePlatform.
 
 ### Future (post-1.0)
