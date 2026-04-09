@@ -83,13 +83,7 @@ func (m *Measurer) ColumnForX(lineBytes []byte, x float32) int {
 		return 0
 	}
 	if isASCII(lineBytes) {
-		col := int((x + m.advance/2) / m.advance)
-		if col < 0 {
-			col = 0
-		}
-		if col > len(lineBytes) {
-			col = len(lineBytes)
-		}
+		col := min(max(int((x+m.advance/2)/m.advance), 0), len(lineBytes))
 		return col
 	}
 	layout, err := m.tm.LayoutText(string(lineBytes), m.style, 0)

@@ -126,7 +126,7 @@ func TestDriver_PgDnScrollsIntoView(t *testing.T) {
 	// Build a 100-line buffer (99 "x" lines + trailing newline
 	// splits into a 100th empty line), viewport = 5 lines tall.
 	var bytes []byte
-	for i := 0; i < 99; i++ {
+	for range 99 {
 		bytes = append(bytes, 'x', '\n')
 	}
 	bytes = append(bytes, 'x')
@@ -161,7 +161,7 @@ func TestDriver_ExternalBufferTruncateHealsCursor(t *testing.T) {
 		IDFocus: 7, Buffer: buf, Width: 400, Height: 200,
 	})
 	// Move cursor to line 4.
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		d.sendKey(gui.KeyDown)
 	}
 	if d.state().Cursor.Line != 4 {

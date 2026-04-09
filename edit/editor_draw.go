@@ -28,10 +28,7 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 		total := buf.LineCount()
 
 		// Visible line range.
-		first := int(st.ScrollY / lh)
-		if first < 0 {
-			first = 0
-		}
+		first := max(int(st.ScrollY/lh), 0)
 		last := int((st.ScrollY + dc.Height) / lh)
 		if last >= total {
 			last = total - 1

@@ -32,9 +32,7 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		var gutterW float32
 		if cfg.ShowLineNumbers {
 			digits := len(strconv.Itoa(cfg.Buffer.LineCount()))
-			if digits < 3 {
-				digits = 3
-			}
+			digits = max(digits, 3)
 			gutterW = float32(digits)*advance + 2*advance
 		}
 
@@ -210,9 +208,7 @@ func moveDown(st *editorState, buf *buffer.Buffer, n int) {
 func clampCol(st *editorState, buf *buffer.Buffer) {
 	ll := len(buf.Line(st.Cursor.Line))
 	want := st.DesiredCol
-	if want > ll {
-		want = ll
-	}
+	want = min(want, ll)
 	st.Cursor.ByteCol = want
 }
 
@@ -267,9 +263,7 @@ func pageLines(frame *editorFrameData, viewportH float32) int {
 		return 1
 	}
 	n := int(viewportH / frame.lineHeight)
-	if n < 1 {
-		n = 1
-	}
+	n = max(n, 1)
 	return n
 }
 

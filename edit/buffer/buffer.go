@@ -234,4 +234,3 @@ func (b *Buffer) insertAt(pos Position, p []byte) Position {
 		ByteCol: len(lastSeg),
 	}
 }
-

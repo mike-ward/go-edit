@@ -26,8 +26,8 @@ func main() {
 `
 
 const (
-	winWidth  = 900
-	winHeight = 600
+	winWidth           = 900
+	winHeight          = 600
 	focusEditor uint32 = 1
 )
 
@@ -39,7 +39,7 @@ func loadBuffer() (*buffer.Buffer, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // best-effort close on read-only file
 	buf, err := buffer.Load(f)
 	if err != nil {
 		return nil, "", err

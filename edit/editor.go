@@ -55,11 +55,11 @@ func Editor(cfg EditorCfg) gui.View {
 
 	canvas := gui.DrawCanvas(gui.DrawCanvasCfg{
 		// ID empty → skip draw cache; OnDraw runs every frame.
-		Width:          cfg.Width,
-		Height:         cfg.Height,
-		Clip:           true,
-		OnDraw:         editorOnDraw(cfg, frame),
-		OnMouseScroll:  editorOnMouseScroll(cfg, frame),
+		Width:         cfg.Width,
+		Height:        cfg.Height,
+		Clip:          true,
+		OnDraw:        editorOnDraw(cfg, frame),
+		OnMouseScroll: editorOnMouseScroll(cfg, frame),
 	})
 
 	return gui.Column(gui.ContainerCfg{

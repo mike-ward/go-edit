@@ -17,9 +17,9 @@ func genBench(lines int) []byte {
 		"func", "var", "const", "type", "return", "if", "for",
 		"range", "struct", "interface", "package", "import",
 	}
-	for i := 0; i < lines; i++ {
+	for range lines {
 		n := 3 + r.IntN(8)
-		for j := 0; j < n; j++ {
+		for j := range n {
 			if j > 0 {
 				out.WriteByte(' ')
 			}
@@ -70,7 +70,7 @@ func BenchmarkRandomEdits10k(b *testing.B) {
 		buf := FromBytes(raw)
 		r := rand.New(rand.NewPCG(1, 1))
 		b.StartTimer()
-		for i := 0; i < 10_000; i++ {
+		for range 10_000 {
 			line := r.IntN(buf.LineCount())
 			col := 0
 			if ll := len(buf.Line(line)); ll > 0 {

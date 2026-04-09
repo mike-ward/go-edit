@@ -60,11 +60,11 @@ func TestClampASCIICol(t *testing.T) {
 	}{
 		{-5, 10, 0},
 		{0, 10, 0},
-		{14, 10, 1},  // 1.4 → rounds to 1
-		{15, 10, 2},  // 1.5 → rounds to 2
-		{49, 10, 5},  // 4.9 → rounds to 5 (clamped)
+		{14, 10, 1},   // 1.4 → rounds to 1
+		{15, 10, 2},   // 1.5 → rounds to 2
+		{49, 10, 5},   // 4.9 → rounds to 5 (clamped)
 		{1000, 10, 5}, // past end → clamp
-		{5, 0, 0},    // zero advance → 0
+		{5, 0, 0},     // zero advance → 0
 	}
 	for _, c := range cases {
 		if got := clampASCIICol(p, c.x, c.adv); got != c.want {

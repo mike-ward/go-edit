@@ -123,7 +123,7 @@ func TestClampOutOfRange(t *testing.T) {
 func TestPropertyInvariants(t *testing.T) {
 	rng := rand.New(rand.NewPCG(1, 2))
 	b := FromBytes([]byte("seed line\nanother\nthird"))
-	for i := 0; i < 2000; i++ {
+	for i := range 2000 {
 		mutateRandom(rng, b)
 		checkInvariants(t, b, i)
 	}
