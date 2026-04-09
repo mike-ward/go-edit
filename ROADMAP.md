@@ -103,7 +103,7 @@ Moved to Phase 1 (need a Buffer to exist first):
 - [x] Headless driver tests via `edit/internal/fakewin`.
 - [x] Buffer benchmarks (`BenchmarkFromBytes100k`, `BenchmarkLoad100k`,
       `BenchmarkLineIter100k`, `BenchmarkRandomEdits10k`).
-- [ ] File save — deferred to Phase 1.2.
+- [x] File save — completed in Phase 1.2.
 
 Architectural deviations from initial plan:
 
@@ -121,22 +121,34 @@ Architectural deviations from initial plan:
 - Upstream change: pushed `(*Window).TextMeasurer()` getter to
   go-gui — one-line mirror of `SetTextMeasurer`.
 
-### Phase 1.2 — File I/O  ☐
+### Phase 1.2 — File I/O  ☑
 
 Settle before undo/highlight assume UTF-8 byte offsets.
 
-- [ ] EOL detect on load (LF / CRLF / CR / mixed); preserve on save.
+- [x] EOL detect on load (LF / CRLF / CR / mixed); preserve on save.
       Normalize to LF in buffer, reapply original on write.
-- [ ] Final-newline-on-save policy (per-buffer flag, default on).
-- [ ] Trailing-whitespace-on-save policy (off by default).
-- [ ] Encoding detect: UTF-8, UTF-8-BOM, UTF-16 LE/BE, Latin-1, CP1252.
+- [x] Final-newline-on-save policy (per-buffer flag, default on).
+- [x] Trailing-whitespace-on-save policy (off by default).
+- [x] Encoding detect: UTF-8, UTF-8-BOM, UTF-16 LE/BE, Latin-1, CP1252.
       Pure-Go chardet-style sniff; explicit override API.
-- [ ] BOM preserve flag per buffer.
-- [ ] Invalid UTF-8: lossless byte-passthrough mode so binaries round-trip.
-- [ ] Transcode on save back to original encoding.
-- [ ] Atomic save (tmp + rename); preserve mode/owner; symlink-aware.
-- [ ] External-change watch: reload clean buffers, prompt dirty ones.
-- [ ] Indent autodetect (tabs vs spaces, width) from file content.
+- [x] BOM preserve flag per buffer.
+- [x] Invalid UTF-8: lossless byte-passthrough mode so binaries round-trip.
+- [x] Transcode on save back to original encoding.
+- [x] Atomic save (tmp + rename); preserve mode/owner; symlink-aware.
+- [x] External-change watch: reload clean buffers, prompt dirty ones.
+- [x] Indent autodetect (tabs vs spaces, width) from file content.
+
+Architectural notes:
+
+- `LoadFile` wraps `Load` with encoding sniff + transcode + EOL detect +
+  indent detect. Original encoding/EOL/BOM stored in `FileProps` for
+  round-trip on save.
+- Save path: `SaveFile` → atomic write (tmp+rename, symlink-aware),
+  re-encodes to original encoding, reapplies original EOL, optional
+  trailing-WS trim + final-newline append.
+- Watcher: poll-based `os.Stat` with injectable clock, throttled to 1/sec.
+  Notifies via callback on external change.
+- Dep: `golang.org/x/text` for UTF-16/Latin-1/CP1252 codecs.
 
 ### Phase 1.5 — Extension substrate  ☐
 

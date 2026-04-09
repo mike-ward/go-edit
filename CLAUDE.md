@@ -77,4 +77,4 @@ Editor state is stored in `gui.StateMap[uint32, editorState](w, "edit.state", ca
 
 ## Status
 
-Phases 0 and 1 (a–d) are committed. File save is deferred to Phase 1.2 (File I/O). Golden-frame tests are deferred until an upstream `DrawContext.Inspect()` accessor exists. The plain-`[]byte` line store will be replaced with a per-line gap buffer once bench pressure from Phase 3 (undo) justifies it. See `ROADMAP.md` for the full phase list and open questions.
+Phases 0, 1, and 1.2 (File I/O) are committed. Golden-frame tests are deferred until an upstream `DrawContext.Inspect()` accessor exists. The plain-`[]byte` line store will be replaced with a per-line gap buffer once bench pressure from Phase 3 (undo) justifies it. See `ROADMAP.md` for the full phase list and open questions.
