@@ -49,6 +49,15 @@ func New(w *gui.Window, style gui.TextStyle) *Measurer {
 	}
 }
 
+// NewFake builds a Measurer with fixed advance and line height,
+// without a real backend. ASCII fast-path only. For tests.
+func NewFake(advance, lineHeight float32) *Measurer {
+	return &Measurer{
+		advance:    advance,
+		lineHeight: lineHeight,
+	}
+}
+
 // Advance returns the cached width of a single monospace glyph.
 func (m *Measurer) Advance() float32 { return m.advance }
 

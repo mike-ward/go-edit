@@ -9,6 +9,15 @@ import (
 	"github.com/mike-ward/go-gui/gui"
 )
 
+// selInfo caches a cursor's selection range for the draw loop.
+type selInfo struct {
+	sel    buffer.Range
+	hasSel bool
+}
+
+// bracketMatchColor highlights the matching bracket pair.
+var bracketMatchColor = gui.RGBA(255, 255, 0, 40)
+
 // selectionBgColor is the background fill for selected text.
 var selectionBgColor = gui.RGBA(51, 144, 255, 96)
 
@@ -44,110 +53,106 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 
 		buf := cfg.Buffer
 		total := buf.LineCount()
+		folds := st.FoldedRanges
+		hasFolds := cfg.EnableFolding && len(folds) > 0
+		wrapOn := frame.wrapActive
 
-		// Visible line range.
-		first := max(int(st.ScrollY/lh), 0)
-		last := int((st.ScrollY + dc.Height) / lh)
-		if last >= total {
-			last = total - 1
+		// Use cached total visual rows from AmendLayout.
+		visTot := frame.totalVisRows
+		if visTot <= 0 {
+			visTot = total
+		}
+
+		// Visible row range in visual-row space.
+		firstVis := max(int(st.ScrollY/lh), 0)
+		lastVis := int((st.ScrollY + dc.Height) / lh)
+		if lastVis >= visTot {
+			lastVis = visTot - 1
 		}
 
 		textX := frame.gutterW + frame.padLeft
 
-		// Collect decorations for visible range.
-		var decos []buffer.Decoration
-		vp := buffer.Viewport{FirstLine: first, LastLine: last}
-		for _, dp := range cfg.Decorations {
-			decos = append(decos, dp.Decorate(vp)...)
-		}
-		slices.SortFunc(decos, decoCompare)
+		firstLogical, lastLogical := visRangeToLogical(
+			buf, st.Measurer, frame, folds,
+			hasFolds, wrapOn, firstVis, lastVis)
+		decos := collectDecos(cfg, firstLogical, lastLogical)
+		sels := buildSelInfos(st.Cursors)
 
-		// Precompute selection ranges for all cursors.
-		// Stack alloc for the common single-cursor case.
-		type selInfo struct {
-			sel    buffer.Range
-			hasSel bool
-		}
-		var selBuf [4]selInfo
-		var sels []selInfo
-		if len(st.Cursors) <= len(selBuf) {
-			sels = selBuf[:len(st.Cursors)]
-		} else {
-			sels = make([]selInfo, len(st.Cursors))
-		}
-		for ci := range st.Cursors {
-			cs := &st.Cursors[ci]
-			if cs.HasSelection() {
-				sels[ci] = selInfo{
-					sel:    cs.SelectionRange(),
-					hasSel: true,
-				}
-			}
-		}
+		foldStyle := gutterStyle
 
-		for i := first; i <= last; i++ {
-			y := float32(i)*lh - st.ScrollY
+		startLine, startSubRow := visRowToStartLine(
+			buf, st.Measurer, frame, folds,
+			hasFolds, wrapOn, firstVis)
+		wsMode := resolveWhitespace(
+			cfg.ShowWhitespace, st.WhitespaceOverride)
+		visRow := firstVis
+		i := startLine
+		curSubRow := startSubRow
 
-			if cfg.ShowLineNumbers {
-				num := strconv.Itoa(i + 1)
-				nw := float32(len(num)) * st.Measurer.Advance()
-				dc.Text(frame.gutterW-nw-frame.padLeft, y,
-					num, gutterStyle)
-			}
-
+		for visRow <= lastVis && i < total {
 			lineBytes := buf.Line(i)
 
-			// Draw search match highlights (below selection).
-			if st.Search.Active && len(st.Search.Matches) > 0 {
-				for _, mr := range matchesForLine(st.Search.Matches, i) {
-					drawSelectionBg(dc, mr, i,
-						lineBytes, textX, y, lh,
-						st.Measurer, matchBgColor)
-				}
-				// Current match in brighter color.
-				idx := st.Search.CurrentMatch
-				if idx >= 0 && idx < len(st.Search.Matches) {
-					cm := st.Search.Matches[idx]
-					if cm.Start.Line <= i && cm.End.Line >= i {
-						drawSelectionBg(dc, cm, i,
-							lineBytes, textX, y, lh,
-							st.Measurer, currentMatchBgColor)
-					}
-				}
+			// Compute wrap breaks for this line.
+			var breaks []int
+			numSubRows := 1
+			if wrapOn && st.Measurer != nil {
+				breaks = computeBreaks(lineBytes,
+					st.Measurer, frame.wrapWidth)
+				numSubRows = len(breaks) + 1
 			}
 
-			// Draw selection backgrounds for all cursors.
-			for ci := range sels {
-				if sels[ci].hasSel {
-					drawSelectionBg(dc, sels[ci].sel, i,
-						lineBytes, textX, y, lh,
-						st.Measurer, selectionBgColor)
-				}
-			}
+			// Draw sub-rows of this line.
+			for sr := curSubRow; sr < numSubRows &&
+				visRow <= lastVis; sr++ {
+				y := float32(visRow)*lh - st.ScrollY
+				subStart, subEnd := subRowByteRange(
+					breaks, sr, len(lineBytes))
 
-			lineDecos := decosForLine(decos, i)
-			if len(lineDecos) == 0 {
-				if len(lineBytes) > 0 {
-					dc.Text(textX, y,
-						text.ExpandTabs(lineBytes, st.Measurer.TabWidth),
-						monoStyle)
+				if cfg.ShowLineNumbers && sr == 0 {
+					drawGutter(dc, cfg, frame, folds,
+						i, y, gutterStyle, foldStyle)
 				}
-			} else {
-				renderStyledLine(dc, textX, y, lineBytes,
-					lineDecos, monoStyle, st.Measurer)
+
+				drawSearchHighlights(dc, &st, i,
+					lineBytes, subStart, subEnd,
+					textX, y, lh)
+				drawSelections(dc, sels, i,
+					lineBytes, subStart, subEnd,
+					textX, y, lh, st.Measurer)
+				drawBracketHighlights(dc, frame, i,
+					subStart, subEnd, lineBytes,
+					textX, y, lh, st.Measurer)
+				drawLineText(dc, lineBytes, breaks,
+					subStart, subEnd, i, textX, y,
+					decos, monoStyle, st.Measurer)
+
+				if sr == 0 && cfg.EnableFolding &&
+					isFoldHeader(folds, i) {
+					eolX := textX + st.Measurer.XForColumn(
+						lineBytes, len(lineBytes))
+					dc.Text(eolX+st.Measurer.Advance()/2,
+						y, " ...", foldStyle)
+				}
+
+				if wsMode != WhitespaceNone {
+					drawWhitespace(dc, lineBytes, i,
+						textX, y, lh, st.Measurer,
+						monoStyle, wsMode, sels)
+				}
+
+				visRow++
+			}
+			curSubRow = 0
+
+			i++
+			if hasFolds {
+				i = nextVisible(folds, i)
 			}
 		}
 
-		// Draw all cursors.
-		for ci := range st.Cursors {
-			cs := &st.Cursors[ci]
-			if cs.Cursor.Line >= first && cs.Cursor.Line <= last {
-				cy := float32(cs.Cursor.Line)*lh - st.ScrollY
-				cx := textX + st.Measurer.XForColumn(
-					buf.Line(cs.Cursor.Line), cs.Cursor.ByteCol)
-				dc.FilledRect(cx, cy, 1, lh, monoStyle.Color)
-			}
-		}
+		drawCursors(dc, cfg, frame, &st, buf, folds,
+			hasFolds, wrapOn, textX, firstVis, lastVis,
+			lh, monoStyle)
 
 		// Gutter separator.
 		if cfg.ShowLineNumbers {
@@ -155,9 +160,388 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 				theme.ColorBorder, 1)
 		}
 
+		// Sticky scroll overlay.
+		if len(frame.stickyLines) > 0 {
+			drawStickyScroll(dc, cfg, frame, &st,
+				st.Measurer, lh, monoStyle, decos)
+		}
+
 		// Find bar overlay.
 		if st.Search.Active {
 			drawFindBar(dc, cfg, &st, st.Measurer, lh, monoStyle)
+		}
+	}
+}
+
+// visRangeToLogical maps first/last visual rows to logical line
+// indices for decoration collection.
+func visRangeToLogical(
+	buf *buffer.Buffer, m *text.Measurer,
+	frame *editorFrameData, folds []FoldRange,
+	hasFolds, wrapOn bool,
+	firstVis, lastVis int,
+) (int, int) {
+	if buf == nil {
+		return firstVis, lastVis
+	}
+	if wrapOn && m != nil {
+		f, _ := globalVisualRowToLogical(
+			buf, m, frame.wrapWidth, folds, firstVis)
+		l, _ := globalVisualRowToLogical(
+			buf, m, frame.wrapWidth, folds, lastVis)
+		return f, l
+	}
+	if hasFolds {
+		return visibleToLogical(firstVis, folds),
+			visibleToLogical(lastVis, folds)
+	}
+	return firstVis, lastVis
+}
+
+// collectDecos gathers decorations for the visible viewport.
+func collectDecos(
+	cfg EditorCfg, firstLine, lastLine int,
+) []buffer.Decoration {
+	if firstLine < 0 {
+		firstLine = 0
+	}
+	if lastLine < firstLine {
+		lastLine = firstLine
+	}
+	var decos []buffer.Decoration
+	vp := buffer.Viewport{FirstLine: firstLine, LastLine: lastLine}
+	for _, dp := range cfg.Decorations {
+		decos = append(decos, dp.Decorate(vp)...)
+	}
+	slices.SortFunc(decos, decoCompare)
+	return decos
+}
+
+// buildSelInfos precomputes selection ranges for all cursors.
+func buildSelInfos(cursors []CursorState) []selInfo {
+	var selBuf [4]selInfo
+	var sels []selInfo
+	if len(cursors) <= len(selBuf) {
+		sels = selBuf[:len(cursors)]
+	} else {
+		sels = make([]selInfo, len(cursors))
+	}
+	for ci := range cursors {
+		cs := &cursors[ci]
+		if cs.HasSelection() {
+			sels[ci] = selInfo{
+				sel:    cs.SelectionRange(),
+				hasSel: true,
+			}
+		}
+	}
+	return sels
+}
+
+// visRowToStartLine converts the first visible visual row to a
+// logical line + sub-row.
+func visRowToStartLine(
+	buf *buffer.Buffer, m *text.Measurer,
+	frame *editorFrameData, folds []FoldRange,
+	hasFolds, wrapOn bool,
+	firstVis int,
+) (int, int) {
+	if buf == nil {
+		return firstVis, 0
+	}
+	if wrapOn && m != nil {
+		return globalVisualRowToLogical(
+			buf, m, frame.wrapWidth, folds, firstVis)
+	}
+	if hasFolds {
+		return visibleToLogical(firstVis, folds), 0
+	}
+	return firstVis, 0
+}
+
+// subRowByteRange returns the [start, end) byte range for sub-row
+// sr of a wrapped line. Returns [0, lineLen) if no breaks.
+func subRowByteRange(breaks []int, sr, lineLen int) (int, int) {
+	if len(breaks) == 0 {
+		return 0, max(lineLen, 0)
+	}
+	if sr < 0 {
+		sr = 0
+	}
+	start := 0
+	if sr > 0 && sr <= len(breaks) {
+		start = breaks[sr-1]
+	}
+	end := lineLen
+	if sr < len(breaks) {
+		end = breaks[sr]
+	}
+	return start, end
+}
+
+// drawGutter draws the line number or fold indicator for one line.
+func drawGutter(
+	dc *gui.DrawContext,
+	cfg EditorCfg,
+	frame *editorFrameData,
+	folds []FoldRange,
+	line int,
+	y float32,
+	gutterStyle, foldStyle gui.TextStyle,
+) {
+	if frame.state.Measurer == nil || line < 0 {
+		return
+	}
+	if cfg.EnableFolding && isFoldHeader(folds, line) {
+		dc.Text(frame.gutterW-frame.padLeft-
+			frame.state.Measurer.Advance(),
+			y, ">", foldStyle)
+		return
+	}
+	num := strconv.Itoa(line + 1)
+	nw := float32(len(num)) * frame.state.Measurer.Advance()
+	dc.Text(frame.gutterW-nw-frame.padLeft, y, num, gutterStyle)
+}
+
+// drawSearchHighlights draws search match backgrounds for a
+// sub-row of a line. subStart/subEnd are the byte range of the
+// visible sub-row; highlights outside this range are skipped.
+func drawSearchHighlights(
+	dc *gui.DrawContext,
+	st *editorState,
+	line int,
+	lineBytes []byte,
+	subStart, subEnd int,
+	textX, y, lh float32,
+) {
+	if !st.Search.Active || len(st.Search.Matches) == 0 {
+		return
+	}
+	for _, mr := range matchesForLine(st.Search.Matches, line) {
+		if !rangeOverlapsSubRow(mr, line, subStart, subEnd) {
+			continue
+		}
+		drawSelectionBg(dc, mr, line, lineBytes, textX, y, lh,
+			st.Measurer, matchBgColor)
+	}
+	idx := st.Search.CurrentMatch
+	if idx >= 0 && idx < len(st.Search.Matches) {
+		cm := st.Search.Matches[idx]
+		if cm.Start.Line <= line && cm.End.Line >= line &&
+			rangeOverlapsSubRow(cm, line, subStart, subEnd) {
+			drawSelectionBg(dc, cm, line, lineBytes, textX, y,
+				lh, st.Measurer, currentMatchBgColor)
+		}
+	}
+}
+
+// drawSelections draws selection backgrounds for all cursors,
+// clipped to the visible sub-row [subStart, subEnd).
+func drawSelections(
+	dc *gui.DrawContext,
+	sels []selInfo,
+	line int,
+	lineBytes []byte,
+	subStart, subEnd int,
+	textX, y, lh float32,
+	m *text.Measurer,
+) {
+	for ci := range sels {
+		if sels[ci].hasSel &&
+			rangeOverlapsSubRow(sels[ci].sel, line,
+				subStart, subEnd) {
+			drawSelectionBg(dc, sels[ci].sel, line,
+				lineBytes, textX, y, lh, m, selectionBgColor)
+		}
+	}
+}
+
+// rangeOverlapsSubRow reports whether a buffer range overlaps
+// the byte range [subStart, subEnd) on the given line.
+func rangeOverlapsSubRow(
+	r buffer.Range, line, subStart, subEnd int,
+) bool {
+	if r.Start.Line > line || r.End.Line < line {
+		return false
+	}
+	startCol := 0
+	if r.Start.Line == line {
+		startCol = r.Start.ByteCol
+	}
+	endCol := subEnd
+	if r.End.Line == line {
+		endCol = r.End.ByteCol
+	}
+	return startCol < subEnd && endCol > subStart
+}
+
+// drawBracketHighlights draws bracket match highlights for a line.
+func drawBracketHighlights(
+	dc *gui.DrawContext,
+	frame *editorFrameData,
+	line, subStart, subEnd int,
+	lineBytes []byte,
+	textX, y, lh float32,
+	m *text.Measurer,
+) {
+	if !frame.bracketFound {
+		return
+	}
+	for _, bp := range frame.bracketMatch {
+		if bp.Line == line &&
+			bp.ByteCol >= subStart && bp.ByteCol < subEnd {
+			bx := textX + m.XForColumn(lineBytes, bp.ByteCol)
+			dc.FilledRect(bx, y, m.Advance(), lh,
+				bracketMatchColor)
+		}
+	}
+}
+
+// drawLineText renders line text, either as a full line (no wrap)
+// or a wrapped sub-row.
+func drawLineText(
+	dc *gui.DrawContext,
+	lineBytes []byte,
+	breaks []int,
+	subStart, subEnd, line int,
+	textX, y float32,
+	decos []buffer.Decoration,
+	base gui.TextStyle,
+	m *text.Measurer,
+) {
+	if m == nil {
+		return
+	}
+	if len(breaks) == 0 {
+		lineDecos := decosForLine(decos, line)
+		if len(lineDecos) == 0 {
+			if len(lineBytes) > 0 {
+				dc.Text(textX, y,
+					text.ExpandTabs(lineBytes, m.TabWidth),
+					base)
+			}
+		} else {
+			renderStyledLine(dc, textX, y, lineBytes,
+				lineDecos, base, m)
+		}
+		return
+	}
+	subBytes := lineBytes[subStart:subEnd]
+	if len(subBytes) > 0 {
+		vcol := text.VisualCols(lineBytes, subStart, m.TabWidth)
+		dc.Text(textX, y,
+			text.ExpandTabsSpan(subBytes, vcol, m.TabWidth), base)
+	}
+}
+
+// drawCursors draws all cursor carets.
+func drawCursors(
+	dc *gui.DrawContext,
+	cfg EditorCfg,
+	frame *editorFrameData,
+	st *editorState,
+	buf *buffer.Buffer,
+	folds []FoldRange,
+	hasFolds, wrapOn bool,
+	textX float32,
+	firstVis, lastVis int,
+	lh float32,
+	style gui.TextStyle,
+) {
+	for ci := range st.Cursors {
+		cs := &st.Cursors[ci]
+		if hasFolds && isFolded(folds, cs.Cursor.Line) {
+			continue
+		}
+		lb := buf.Line(cs.Cursor.Line)
+		var cVisRow int
+		var curBreaks []int
+		if wrapOn && st.Measurer != nil {
+			cVisRow = globalLogicalToVisualRow(
+				buf, st.Measurer, frame.wrapWidth,
+				folds, cs.Cursor.Line)
+			curBreaks = computeBreaks(lb,
+				st.Measurer, frame.wrapWidth)
+			we := wrapEntry{BreakCols: curBreaks}
+			cVisRow += wrapCursorVisualRow(&we,
+				cs.Cursor.ByteCol)
+		} else if hasFolds {
+			cVisRow = logicalToVisible(cs.Cursor.Line, folds)
+		} else {
+			cVisRow = cs.Cursor.Line
+		}
+		if cVisRow < firstVis || cVisRow > lastVis {
+			continue
+		}
+		cy := float32(cVisRow)*lh - st.ScrollY
+		cx := textX + st.Measurer.XForColumn(lb,
+			cs.Cursor.ByteCol)
+		if len(curBreaks) > 0 {
+			we := wrapEntry{BreakCols: curBreaks}
+			sr := wrapCursorVisualRow(&we, cs.Cursor.ByteCol)
+			subStart, _ := wrapSubRowRange(&we, len(lb), sr)
+			cx = textX +
+				st.Measurer.XForColumn(lb,
+					cs.Cursor.ByteCol) -
+				st.Measurer.XForColumn(lb, subStart)
+		}
+		dc.FilledRect(cx, cy, 1, lh, style.Color)
+	}
+}
+
+// stickyBgColor is the background for the sticky scroll area.
+var stickyBgColor = gui.RGBA(30, 30, 30, 240)
+
+// stickyBorderColor is the bottom border of the sticky area.
+var stickyBorderColor = gui.RGBA(60, 60, 60, 255)
+
+// drawStickyScroll draws pinned scope headers at the top.
+func drawStickyScroll(
+	dc *gui.DrawContext,
+	cfg EditorCfg,
+	frame *editorFrameData,
+	st *editorState,
+	m *text.Measurer,
+	lh float32,
+	baseStyle gui.TextStyle,
+	decos []buffer.Decoration,
+) {
+	if m == nil || lh <= 0 || len(frame.stickyLines) == 0 {
+		return
+	}
+	textX := frame.gutterW + frame.padLeft
+	stickyH := float32(len(frame.stickyLines)) * lh
+
+	// Background.
+	dc.FilledRect(0, 0, dc.Width, stickyH, stickyBgColor)
+	dc.Line(0, stickyH, dc.Width, stickyH, stickyBorderColor, 1)
+
+	gutterStyle := baseStyle
+	gutterStyle.Color = gui.CurrentTheme().ColorBorder
+
+	for si, line := range frame.stickyLines {
+		y := float32(si) * lh
+		lineBytes := cfg.Buffer.Line(line)
+
+		// Gutter number.
+		if cfg.ShowLineNumbers {
+			num := strconv.Itoa(line + 1)
+			nw := float32(len(num)) * m.Advance()
+			dc.Text(frame.gutterW-nw-frame.padLeft,
+				y, num, gutterStyle)
+		}
+
+		// Line text with syntax highlighting.
+		lineDecos := decosForLine(decos, line)
+		if len(lineDecos) == 0 {
+			if len(lineBytes) > 0 {
+				dc.Text(textX, y,
+					text.ExpandTabs(lineBytes, m.TabWidth),
+					baseStyle)
+			}
+		} else {
+			renderStyledLine(dc, textX, y, lineBytes,
+				lineDecos, baseStyle, m)
 		}
 	}
 }

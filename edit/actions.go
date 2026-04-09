@@ -143,12 +143,33 @@ var defaultActions = map[string]Action{
 	"edit.backspace": {
 		ID:        "edit.backspace",
 		PerCursor: true,
-		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
+		Execute: func(cfg EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
 			p := st.primary()
 			if p.HasSelection() {
 				buf.BeginGroup()
 				deleteCursorSelection(p, buf)
 				buf.EndGroup()
+				return
+			}
+			// Auto-close: delete both opener and closer.
+			pairs := cfg.AutoClosePairs
+			if pairs == nil {
+				pairs = DefaultAutoClosePairs
+			}
+			if len(pairs) > 0 &&
+				shouldDeletePair(buf, p.Cursor, pairs) {
+				start := buffer.Position{
+					Line:    p.Cursor.Line,
+					ByteCol: p.Cursor.ByteCol - 1,
+				}
+				end := buffer.Position{
+					Line:    p.Cursor.Line,
+					ByteCol: p.Cursor.ByteCol + 1,
+				}
+				c := buf.Apply(buffer.Edit{
+					Range: buffer.Range{Start: start, End: end},
+				})
+				p.Cursor = c.AppliedRange.Start
 				return
 			}
 			backspace(p, buf)
@@ -279,6 +300,30 @@ var defaultActions = map[string]Action{
 		},
 	},
 
+	// ---- bracket ----
+
+	"cursor.matchBracket": {
+		ID:        "cursor.matchBracket",
+		PerCursor: true,
+		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
+			p := st.primary()
+			if m, ok := findMatchingBracket(buf, p.Cursor); ok {
+				p.Cursor = m
+			}
+		},
+	},
+	"select.matchBracket": {
+		ID:              "select.matchBracket",
+		PerCursor:       true,
+		PreservesAnchor: true,
+		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
+			p := st.primary()
+			if m, ok := findMatchingBracket(buf, p.Cursor); ok {
+				p.Cursor = m
+			}
+		},
+	},
+
 	// ---- find ----
 
 	"find.open": {
@@ -291,6 +336,76 @@ var defaultActions = map[string]Action{
 		ID: "find.openReplace",
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
 			openFindBar(st, buf, true)
+		},
+	},
+
+	// ---- folding ----
+
+	"fold.toggle": {
+		ID: "fold.toggle",
+		Execute: func(cfg EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
+			if !cfg.EnableFolding {
+				return
+			}
+			st.FoldedRanges = toggleFold(
+				st.FoldedRanges, buf,
+				st.primary().Cursor.Line,
+				resolveTabWidth(st.Measurer))
+		},
+	},
+	"fold.all": {
+		ID: "fold.all",
+		Execute: func(cfg EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
+			if !cfg.EnableFolding {
+				return
+			}
+			st.FoldedRanges = foldAll(buf,
+				resolveTabWidth(st.Measurer))
+		},
+	},
+	"fold.unfoldAll": {
+		ID: "fold.unfoldAll",
+		Execute: func(cfg EditorCfg, st *editorState, _ *buffer.Buffer, _ *gui.Window) {
+			if !cfg.EnableFolding {
+				return
+			}
+			st.FoldedRanges = nil
+		},
+	},
+
+	// ---- view ----
+
+	"view.toggleStickyScroll": {
+		ID: "view.toggleStickyScroll",
+		Execute: func(_ EditorCfg, st *editorState, _ *buffer.Buffer, _ *gui.Window) {
+			switch st.StickyScrollOverride {
+			case 0:
+				st.StickyScrollOverride = 1
+			case 1:
+				st.StickyScrollOverride = 2
+			default:
+				st.StickyScrollOverride = 1
+			}
+		},
+	},
+	"view.toggleWrap": {
+		ID: "view.toggleWrap",
+		Execute: func(_ EditorCfg, st *editorState, _ *buffer.Buffer, _ *gui.Window) {
+			switch st.WrapOverride {
+			case 0:
+				st.WrapOverride = 1 // force on
+			case 1:
+				st.WrapOverride = 2 // force off
+			default:
+				st.WrapOverride = 1 // back to on
+			}
+		},
+	},
+	"view.toggleWhitespace": {
+		ID: "view.toggleWhitespace",
+		Execute: func(_ EditorCfg, st *editorState, _ *buffer.Buffer, _ *gui.Window) {
+			st.WhitespaceOverride = cycleWhitespace(
+				st.WhitespaceOverride)
 		},
 	},
 

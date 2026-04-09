@@ -78,7 +78,7 @@ func TestSanitizeDim_ClampsEdgeValues(t *testing.T) {
 func TestClampScroll_NaNIn(t *testing.T) {
 	cfg := EditorCfg{Buffer: mkBuf("a\nb\nc"), Height: 10}
 	st := editorState{ScrollY: float32(math.NaN())}
-	clampScroll(&st, cfg, 10)
+	clampScroll(&st, cfg, &editorFrameData{}, 10)
 	if st.ScrollY != 0 || st.ScrollY != st.ScrollY {
 		t.Errorf("ScrollY=%v want 0", st.ScrollY)
 	}
@@ -87,7 +87,7 @@ func TestClampScroll_NaNIn(t *testing.T) {
 func TestClampScroll_ZeroLineHeight(t *testing.T) {
 	cfg := EditorCfg{Buffer: mkBuf("a\nb"), Height: 10}
 	st := editorState{ScrollY: 500}
-	clampScroll(&st, cfg, 0)
+	clampScroll(&st, cfg, &editorFrameData{}, 0)
 	if st.ScrollY != 0 {
 		t.Errorf("ScrollY=%v want 0", st.ScrollY)
 	}
@@ -98,7 +98,7 @@ func TestClampScroll_ZeroLineHeight(t *testing.T) {
 func TestEnsureCursorVisible_NaNViewport(t *testing.T) {
 	st := editorState{ScrollY: 42}
 	fr := &editorFrameData{lineHeight: 10, valid: true}
-	ensureCursorVisible(&st, fr, float32(math.NaN()))
+	ensureCursorVisible(&st, fr, EditorCfg{Buffer: buffer.New(), Height: float32(math.NaN())})
 	if st.ScrollY != 42 {
 		t.Errorf("ScrollY=%v want 42 (unchanged)", st.ScrollY)
 	}
@@ -107,7 +107,7 @@ func TestEnsureCursorVisible_NaNViewport(t *testing.T) {
 func TestEnsureCursorVisible_ZeroViewport(t *testing.T) {
 	st := editorState{ScrollY: 42}
 	fr := &editorFrameData{lineHeight: 10, valid: true}
-	ensureCursorVisible(&st, fr, 0)
+	ensureCursorVisible(&st, fr, EditorCfg{Buffer: buffer.New(), Height: 0})
 	if st.ScrollY != 42 {
 		t.Errorf("ScrollY=%v want 42 (unchanged)", st.ScrollY)
 	}

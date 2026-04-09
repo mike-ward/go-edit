@@ -55,7 +55,7 @@ func TestClampCursors_EmptyBuffer(t *testing.T) {
 func TestClampScroll_LargeBuffer(t *testing.T) {
 	cfg := EditorCfg{Buffer: mkBuf("a\nb\nc\nd\ne"), Height: 20}
 	st := editorState{ScrollY: 1000}
-	clampScroll(&st, cfg, 10) // 5 lines * 10 = 50; 50-20 = 30 max
+	clampScroll(&st, cfg, &editorFrameData{}, 10) // 5 lines * 10 = 50; 50-20 = 30 max
 	if st.ScrollY != 30 {
 		t.Errorf("ScrollY=%v want 30", st.ScrollY)
 	}
@@ -64,7 +64,7 @@ func TestClampScroll_LargeBuffer(t *testing.T) {
 func TestClampScroll_BufferFitsInViewport(t *testing.T) {
 	cfg := EditorCfg{Buffer: mkBuf("a\nb"), Height: 100}
 	st := editorState{ScrollY: 50}
-	clampScroll(&st, cfg, 10)
+	clampScroll(&st, cfg, &editorFrameData{}, 10)
 	if st.ScrollY != 0 {
 		t.Errorf("ScrollY=%v want 0", st.ScrollY)
 	}
@@ -73,7 +73,7 @@ func TestClampScroll_BufferFitsInViewport(t *testing.T) {
 func TestClampScroll_NegativeIn(t *testing.T) {
 	cfg := EditorCfg{Buffer: mkBuf("a\nb\nc"), Height: 10}
 	st := editorState{ScrollY: -50}
-	clampScroll(&st, cfg, 10)
+	clampScroll(&st, cfg, &editorFrameData{}, 10)
 	if st.ScrollY != 0 {
 		t.Errorf("ScrollY=%v want 0", st.ScrollY)
 	}
@@ -191,7 +191,7 @@ func TestEnsureCursorVisible_TinyViewport(t *testing.T) {
 		{Cursor: buffer.Position{Line: 5}},
 	}}
 	fr := &editorFrameData{lineHeight: 10, valid: true}
-	ensureCursorVisible(&st, fr, 5)
+	ensureCursorVisible(&st, fr, EditorCfg{Buffer: buffer.New(), Height: 5})
 	if st.ScrollY < 0 {
 		t.Errorf("ScrollY=%v negative", st.ScrollY)
 	}
@@ -205,7 +205,7 @@ func TestEnsureCursorVisible_InvalidFrame(t *testing.T) {
 		ScrollY: 7,
 	}
 	fr := &editorFrameData{lineHeight: 10, valid: false}
-	ensureCursorVisible(&st, fr, 100)
+	ensureCursorVisible(&st, fr, EditorCfg{Buffer: buffer.New(), Height: 100})
 	if st.ScrollY != 7 {
 		t.Errorf("ScrollY=%v want 7 (unchanged)", st.ScrollY)
 	}

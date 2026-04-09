@@ -53,6 +53,19 @@ var DefaultKeymap = &Keymap{
 		{Key: gui.KeyD, Modifiers: gui.ModSuper, ActionID: "cursor.addNext"},
 		{Key: gui.KeyEscape, ActionID: "cursor.escape"},
 
+		// ---- line wrap ----
+		{Key: gui.KeyZ, Modifiers: gui.ModAlt, ActionID: "view.toggleWrap"},
+
+		// ---- folding ----
+		{Key: gui.KeyLeftBracket, Modifiers: gui.ModCtrl | gui.ModShift, ActionID: "fold.toggle"},
+		{Key: gui.KeyLeftBracket, Modifiers: gui.ModSuper | gui.ModShift, ActionID: "fold.toggle"},
+		{Key: gui.KeyRightBracket, Modifiers: gui.ModCtrl | gui.ModShift, ActionID: "fold.unfoldAll"},
+		{Key: gui.KeyRightBracket, Modifiers: gui.ModSuper | gui.ModShift, ActionID: "fold.unfoldAll"},
+
+		// ---- bracket match ----
+		{Key: gui.KeyBackslash, Modifiers: gui.ModCtrl | gui.ModShift, ActionID: "cursor.matchBracket"},
+		{Key: gui.KeyBackslash, Modifiers: gui.ModSuper | gui.ModShift, ActionID: "cursor.matchBracket"},
+
 		// ---- find / replace ----
 		{Key: gui.KeyF, Modifiers: gui.ModCtrl, ActionID: "find.open"},
 		{Key: gui.KeyF, Modifiers: gui.ModSuper, ActionID: "find.open"},

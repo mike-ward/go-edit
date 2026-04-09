@@ -13,15 +13,22 @@ import (
 // (DrawCanvas caches the full draw output, which defeats line
 // virtualization).
 type EditorCfg struct {
-	IDFocus         uint32
-	Buffer          *buffer.Buffer
-	Width           float32
-	Height          float32
-	ShowLineNumbers bool
-	ReadOnly        bool
-	Decorations     []buffer.DecorationProvider
-	Keymaps         []*Keymap         // pushed on top of DefaultKeymap
-	Actions         map[string]Action // additional/override actions
+	IDFocus          uint32
+	Buffer           *buffer.Buffer
+	Width            float32
+	Height           float32
+	ShowLineNumbers  bool
+	ShowBracketMatch bool
+	ShowWhitespace   WhitespaceMode
+	AutoClosePairs   []AutoClosePair // nil = use DefaultAutoClosePairs
+	EnableFolding    bool
+	LineWrap         bool
+	StickyScroll     bool
+	StickyScrollMax  int // 0 = use default (5)
+	ReadOnly         bool
+	Decorations      []buffer.DecorationProvider
+	Keymaps          []*Keymap         // pushed on top of DefaultKeymap
+	Actions          map[string]Action // additional/override actions
 	// OnInvalidate is called once with a RequestRedraw thunk.
 	// Decoration providers that do background work should store
 	// the thunk and call it when new data is ready.

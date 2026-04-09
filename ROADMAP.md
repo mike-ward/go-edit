@@ -353,14 +353,47 @@ Architectural notes:
   selection. `filterToScope` post-filters match results. `[Sel]`
   indicator in find bar toggles.
 
-### Phase 7 — Quality of life  ☐
+### Phase 7 — Quality of life  ☑
 
-- [ ] Bracket matching + auto-close pairs.
-- [ ] Line wrap (toggleable).
-- [ ] Code folding (indent-based first; language-aware later).
-- [ ] Whitespace + EOL visualization.
-- [ ] Minimap (decimated render of buffer).
-- [ ] Sticky scroll (pinned scope headers).
+- [x] Bracket matching + auto-close pairs.
+- [x] Line wrap (toggleable).
+- [x] Code folding (indent-based first; language-aware later).
+- [x] Whitespace + EOL visualization.
+- [x] Sticky scroll (pinned scope headers).
+
+Architectural notes:
+
+- Bracket matching: `findMatchingBracket` in `edit/brackets.go`.
+  Naive scan (no string/comment awareness) with 10k byte cap.
+  Match computed per-frame in AmendLayout, stored in
+  `editorFrameData.bracketMatch`. Drawn as background rects.
+  `cursor.matchBracket` action jumps to match (Ctrl+Shift+\\).
+- Auto-close pairs: `EditFilter` in `edit/autoclose.go`.
+  Registered in AmendLayout. Default pairs: `()[]{}""''`\`\``.
+  Skip-over in `editorOnChar`; backspace-both in backspace action.
+  Quote auto-close suppressed after alphanumeric context.
+- Whitespace viz: `edit/whitespace.go`. `WhitespaceMode` enum
+  (None/All/Selection). Draws `·`/`→`/`↵` after line text.
+  Runtime toggle via `view.toggleWhitespace` action cycling
+  `WhitespaceOverride` in editorState.
+- Code folding: `edit/fold.go`. Indent-based `foldRangeAt`
+  detection. `FoldedRanges []FoldRange` persisted in editorState.
+  Draw loop skips folded lines; gutter shows `>` on fold headers
+  with ` ...` ellipsis. Cursor movement skips folds (down → past
+  fold, up → to header). `PostEditFunc` unfolds ranges overlapping
+  edits. Gutter click toggles fold. `fold.toggle` (Ctrl+Shift+[),
+  `fold.all`, `fold.unfoldAll` (Ctrl+Shift+]) actions.
+- Line wrap: `edit/wrap.go`. `computeBreaks` finds byte-offset
+  break points per line, preferring word boundaries. Draw loop
+  iterates visual sub-rows. `globalLogicalToVisualRow` /
+  `globalVisualRowToLogical` for scroll/cursor mapping.
+  `totalVisualRowsForBuffer` for scroll clamping. `WrapOverride`
+  in editorState for runtime toggle (Alt+Z). Cursor Y and hit-test
+  account for sub-row offsets.
+- Sticky scroll: `edit/stickyscroll.go`. `findScopeHeaders` walks
+  backward from first visible line collecting lines with
+  decreasing indent. Drawn as opaque overlay at viewport top with
+  syntax highlighting. Up to `StickyScrollMax` (default 5) headers.
 
 ### Phase 8 — Polish  ☐
 

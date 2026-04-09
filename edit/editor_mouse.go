@@ -32,12 +32,38 @@ func hitTestPosition(
 		return buffer.Position{}
 	}
 
-	line := max(int((my+frame.state.ScrollY)/lh), 0)
+	visRow := max(int((my+frame.state.ScrollY)/lh), 0)
+	folds := frame.state.FoldedRanges
+	m := frame.state.Measurer
+
+	var line, subRow int
+	if frame.wrapActive && m != nil {
+		line, subRow = globalVisualRowToLogical(
+			buf, m, frame.wrapWidth, folds, visRow)
+	} else if len(folds) > 0 {
+		line = visibleToLogical(visRow, folds)
+	} else {
+		line = visRow
+	}
 	line = min(line, buf.LineCount()-1)
 
 	lineBytes := buf.Line(line)
-	col := min(frame.state.Measurer.ColumnForX(lineBytes, mx), len(lineBytes))
 
+	// For wrapped lines, adjust mx to account for sub-row.
+	if frame.wrapActive && m != nil && subRow > 0 {
+		breaks := computeBreaks(lineBytes, m, frame.wrapWidth)
+		we := wrapEntry{BreakCols: breaks}
+		subStart, subEnd := wrapSubRowRange(
+			&we, len(lineBytes), subRow)
+		col := m.ColumnForX(lineBytes[subStart:], mx)
+		col += subStart
+		if col > subEnd {
+			col = subEnd
+		}
+		return buffer.Position{Line: line, ByteCol: col}
+	}
+
+	col := min(m.ColumnForX(lineBytes, mx), len(lineBytes))
 	return buffer.Position{Line: line, ByteCol: col}
 }
 
@@ -52,6 +78,44 @@ func editorOnClick(
 			return
 		}
 		st := loadState(w, cfg.IDFocus)
+
+		// Gutter click: toggle fold.
+		if cfg.EnableFolding && cfg.ShowLineNumbers &&
+			e.MouseX < frame.gutterW {
+			lh := frame.lineHeight
+			if lh > 0 {
+				visRow := int(
+					(e.MouseY + st.ScrollY) / lh)
+				var line int
+				if frame.wrapActive && st.Measurer != nil {
+					line, _ = globalVisualRowToLogical(
+						cfg.Buffer, st.Measurer,
+						frame.wrapWidth,
+						st.FoldedRanges, visRow)
+				} else if len(st.FoldedRanges) > 0 {
+					line = visibleToLogical(
+						visRow, st.FoldedRanges)
+				} else {
+					line = visRow
+				}
+				tw := 4
+				if st.Measurer != nil {
+					tw = st.Measurer.TabWidth
+				}
+				if line >= 0 &&
+					line < cfg.Buffer.LineCount() &&
+					(isFoldHeader(st.FoldedRanges, line) ||
+						isFoldable(cfg.Buffer, line, tw)) {
+					st.FoldedRanges = toggleFold(
+						st.FoldedRanges,
+						cfg.Buffer, line, tw)
+					storeState(w, cfg.IDFocus, st)
+					e.IsHandled = true
+					return
+				}
+			}
+		}
+
 		pos := hitTestPosition(e, frame, cfg.Buffer)
 		now := time.Now().UnixMilli()
 
@@ -110,7 +174,7 @@ func editorOnClick(
 			}
 		}
 
-		ensureCursorVisible(&st, frame, cfg.Height)
+		ensureCursorVisible(&st, frame, cfg)
 		storeState(w, cfg.IDFocus, st)
 
 		// Start drag via MouseLock for single clicks (not alt-click).
@@ -138,7 +202,7 @@ func editorDragMove(
 		p := st.primary()
 		p.Cursor = hitTestPosition(e, frame, cfg.Buffer)
 		p.DesiredCol = p.Cursor.ByteCol
-		ensureCursorVisible(&st, frame, cfg.Height)
+		ensureCursorVisible(&st, frame, cfg)
 		storeState(w, cfg.IDFocus, st)
 	}
 }

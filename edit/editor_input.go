@@ -28,6 +28,9 @@ func isEditAction(id string) bool {
 func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.Window) {
 	invalidateSent := false
 	var searchEditRemove func()
+	var autoCloseRemove func()
+	var foldEditRemove func()
+	var visRowsEditRemove func()
 
 	return func(layout *gui.Layout, w *gui.Window) {
 		st := loadState(w, cfg.IDFocus)
@@ -65,27 +68,79 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		// Clamp cursors against current buffer size — the buffer
 		// may have been mutated externally between frames.
 		clampCursors(&st, cfg.Buffer)
-		clampScroll(&st, cfg, lh)
 
-		// Recompute search matches when query/flags changed or
-		// buffer was edited.
-		if st.Search.Active && len(st.Search.Query) > 0 &&
-			needsRecompute(&st.Search) {
-			recomputeMatches(&st, cfg.Buffer)
+		// Snap cursors out of folded regions.
+		if cfg.EnableFolding && len(st.FoldedRanges) > 0 {
+			for i := range st.Cursors {
+				snapCursorOutOfFold(&st.Cursors[i],
+					st.FoldedRanges)
+			}
 		}
-		// Register/remove buffer edit observer for match
-		// invalidation.
-		if st.Search.Active && searchEditRemove == nil {
-			searchEditRemove = cfg.Buffer.OnEdit(func(_ buffer.Change) {
-				// Mark dirty; recompute on next AmendLayout.
-				st := loadState(w, cfg.IDFocus)
-				st.Search.matchesDirty = true
-				storeState(w, cfg.IDFocus, st)
-			})
-		} else if !st.Search.Active && searchEditRemove != nil {
-			searchEditRemove()
-			searchEditRemove = nil
+
+		// Resolve wrap state (before clampScroll needs it).
+		wrapActive := resolveWrap(cfg.LineWrap, st.WrapOverride)
+		frame.wrapActive = wrapActive
+		if wrapActive {
+			frame.wrapWidth = cfg.Width - gutterW - advance/2
+			if frame.wrapWidth < advance {
+				frame.wrapWidth = advance
+			}
 		}
+
+		// Mark visual-row cache dirty on any buffer edit.
+		if wrapActive && visRowsEditRemove == nil {
+			visRowsEditRemove = cfg.Buffer.OnEdit(
+				func(_ buffer.Change) {
+					frame.visRowsDirty = true
+				})
+		} else if !wrapActive && visRowsEditRemove != nil {
+			visRowsEditRemove()
+			visRowsEditRemove = nil
+		}
+
+		// Cache total visual rows (fold+wrap aware). Only
+		// recompute when inputs change (line count, wrap width,
+		// fold count, or buffer edit).
+		total := cfg.Buffer.LineCount()
+		needRecompute := frame.visRowsDirty ||
+			frame.visRowsCacheLines != total ||
+			frame.visRowsCacheWidth != frame.wrapWidth ||
+			frame.visRowsCacheFolds != len(st.FoldedRanges)
+		if needRecompute {
+			if wrapActive && st.Measurer != nil {
+				frame.totalVisRows = totalVisualRowsForBuffer(
+					cfg.Buffer, st.Measurer,
+					frame.wrapWidth, st.FoldedRanges)
+			} else if cfg.EnableFolding &&
+				len(st.FoldedRanges) > 0 {
+				frame.totalVisRows = visibleLineCount(
+					total, st.FoldedRanges)
+			} else {
+				frame.totalVisRows = total
+			}
+			frame.visRowsCacheLines = total
+			frame.visRowsCacheWidth = frame.wrapWidth
+			frame.visRowsCacheFolds = len(st.FoldedRanges)
+			frame.visRowsDirty = false
+		}
+
+		clampScroll(&st, cfg, frame, lh)
+
+		// Search match refresh + observer.
+		searchEditRemove = syncSearchObserver(
+			cfg, &st, w, searchEditRemove)
+
+		// Auto-close filter.
+		autoCloseRemove = syncAutoCloseFilter(
+			cfg, autoCloseRemove)
+
+		// Fold invalidation observer.
+		foldEditRemove = syncFoldObserver(
+			cfg, w, foldEditRemove)
+
+		// Bracket match + sticky scroll (transient per frame).
+		computeBracketMatch(cfg, &st, frame)
+		computeStickyScroll(cfg, &st, frame, lh)
 
 		frame.state = st
 		frame.lineHeight = lh
@@ -125,7 +180,7 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 			st := loadState(w, cfg.IDFocus)
 			if st.Search.Active {
 				if handleSearchKey(cfg, &st, cfg.Buffer, e) {
-					ensureCursorVisible(&st, frame, cfg.Height)
+					ensureCursorVisible(&st, frame, cfg)
 					storeState(w, cfg.IDFocus, st)
 					e.IsHandled = true
 					return
@@ -164,8 +219,26 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 			applyPostAction(&st, action)
 		}
 
+		// Skip cursors past folded ranges after movement.
+		if cfg.EnableFolding && len(st.FoldedRanges) > 0 {
+			isDown := actionID == "cursor.down" ||
+				actionID == "select.down" ||
+				actionID == "cursor.pagedown" ||
+				actionID == "select.pagedown"
+			for i := range st.Cursors {
+				if isDown {
+					skipFoldsDown(&st.Cursors[i],
+						st.FoldedRanges)
+				} else {
+					skipFoldsUp(&st.Cursors[i],
+						st.FoldedRanges)
+				}
+			}
+			clampCursors(&st, cfg.Buffer)
+		}
+
 		sortAndMerge(&st)
-		ensureCursorVisible(&st, frame, cfg.Height)
+		ensureCursorVisible(&st, frame, cfg)
 		storeState(w, cfg.IDFocus, st)
 		e.IsHandled = true
 	}
@@ -196,12 +269,46 @@ func editorOnChar(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.
 		n := utf8.EncodeRune(buf2[:], r)
 
 		st := loadState(w, cfg.IDFocus)
+
+		// Auto-close: skip over existing closer instead of
+		// inserting a duplicate. Check each cursor individually.
+		if n == 1 && len(st.Cursors) > 0 {
+			pairs := cfg.AutoClosePairs
+			if pairs == nil {
+				pairs = DefaultAutoClosePairs
+			}
+			allSkip := true
+			for i := range st.Cursors {
+				if !shouldSkipCloser(cfg.Buffer,
+					st.Cursors[i].Cursor, buf2[0], pairs) {
+					allSkip = false
+					break
+				}
+			}
+			if allSkip {
+				for i := range st.Cursors {
+					cs := &st.Cursors[i]
+					ll := len(cfg.Buffer.Line(cs.Cursor.Line))
+					if cs.Cursor.ByteCol < ll {
+						cs.Cursor.ByteCol++
+					}
+					cs.ClearSelection()
+					cs.DesiredCol = cs.Cursor.ByteCol
+				}
+				sortAndMerge(&st)
+				ensureCursorVisible(&st, frame, cfg)
+				storeState(w, cfg.IDFocus, st)
+				e.IsHandled = true
+				return
+			}
+		}
+
 		cfg.Buffer.SetUndoCursorState(buildUndoCursorState(&st))
 
 		charInsertPerCursor(&st, cfg.Buffer, buf2[:n])
 
 		sortAndMerge(&st)
-		ensureCursorVisible(&st, frame, cfg.Height)
+		ensureCursorVisible(&st, frame, cfg)
 		storeState(w, cfg.IDFocus, st)
 		e.IsHandled = true
 	}
@@ -217,7 +324,7 @@ func editorOnMouseScroll(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout
 		st := loadState(w, cfg.IDFocus)
 		// Positive ScrollY means scroll up; invert for natural feel.
 		st.ScrollY -= dy * frame.lineHeight * 3
-		clampScroll(&st, cfg, frame.lineHeight)
+		clampScroll(&st, cfg, frame, frame.lineHeight)
 		storeState(w, cfg.IDFocus, st)
 		e.IsHandled = true
 	}
@@ -369,7 +476,123 @@ func clampPos(p *buffer.Position, buf *buffer.Buffer) {
 
 // clampScroll keeps ScrollY within [0, maxScroll]. Also sanitizes
 // NaN — if ScrollY went NaN from bad input upstream, snap to 0.
-func clampScroll(st *editorState, cfg EditorCfg, lh float32) {
+// syncSearchObserver manages the search match observer lifecycle
+// and recomputes matches when needed.
+func syncSearchObserver(
+	cfg EditorCfg, st *editorState, w *gui.Window,
+	remove func(),
+) func() {
+	if st.Search.Active && len(st.Search.Query) > 0 &&
+		needsRecompute(&st.Search) {
+		recomputeMatches(st, cfg.Buffer)
+	}
+	if st.Search.Active && remove == nil {
+		remove = cfg.Buffer.OnEdit(func(_ buffer.Change) {
+			s := loadState(w, cfg.IDFocus)
+			s.Search.matchesDirty = true
+			storeState(w, cfg.IDFocus, s)
+		})
+	} else if !st.Search.Active && remove != nil {
+		remove()
+		remove = nil
+	}
+	return remove
+}
+
+// syncAutoCloseFilter manages the auto-close EditFilter lifecycle.
+func syncAutoCloseFilter(
+	cfg EditorCfg, remove func(),
+) func() {
+	pairs := cfg.AutoClosePairs
+	if pairs == nil {
+		pairs = DefaultAutoClosePairs
+	}
+	if len(pairs) > 0 && !cfg.ReadOnly && remove == nil {
+		remove = cfg.Buffer.AddFilter(autoCloseFilter(pairs))
+	} else if (len(pairs) == 0 || cfg.ReadOnly) && remove != nil {
+		remove()
+		remove = nil
+	}
+	return remove
+}
+
+// syncFoldObserver manages the fold-invalidation observer.
+func syncFoldObserver(
+	cfg EditorCfg, w *gui.Window, remove func(),
+) func() {
+	if cfg.EnableFolding && remove == nil {
+		remove = cfg.Buffer.OnEdit(func(c buffer.Change) {
+			s := loadState(w, cfg.IDFocus)
+			if len(s.FoldedRanges) > 0 {
+				s.FoldedRanges = invalidateFolds(
+					s.FoldedRanges, c)
+				storeState(w, cfg.IDFocus, s)
+			}
+		})
+	} else if !cfg.EnableFolding && remove != nil {
+		remove()
+		remove = nil
+	}
+	return remove
+}
+
+// computeBracketMatch finds the matching bracket for the primary
+// cursor and stores the result in frame.
+func computeBracketMatch(
+	cfg EditorCfg, st *editorState, frame *editorFrameData,
+) {
+	frame.bracketFound = false
+	if cfg.Buffer == nil {
+		return
+	}
+	if cfg.ShowBracketMatch && len(st.Cursors) > 0 {
+		if m, ok := findMatchingBracket(
+			cfg.Buffer, st.Cursors[0].Cursor); ok {
+			_, bpos := bracketAtCursor(
+				cfg.Buffer, st.Cursors[0].Cursor)
+			frame.bracketMatch = [2]buffer.Position{bpos, m}
+			frame.bracketFound = true
+		}
+	}
+}
+
+// computeStickyScroll finds scope headers for the sticky scroll
+// overlay and stores them in frame.
+func computeStickyScroll(
+	cfg EditorCfg, st *editorState,
+	frame *editorFrameData, lh float32,
+) {
+	frame.stickyLines = nil
+	stickyOn := resolveStickyScroll(
+		cfg.StickyScroll, st.StickyScrollOverride)
+	if !stickyOn || lh <= 0 || lh != lh { // NaN
+		return
+	}
+	firstVis := max(int(st.ScrollY/lh), 0)
+	stickyMax := cfg.StickyScrollMax
+	if stickyMax <= 0 {
+		stickyMax = defaultStickyMax
+	}
+	tw := text.DefaultTabWidth
+	if st.Measurer != nil {
+		tw = st.Measurer.TabWidth
+	}
+	var firstLogical int
+	if frame.wrapActive && st.Measurer != nil {
+		firstLogical, _ = globalVisualRowToLogical(
+			cfg.Buffer, st.Measurer, frame.wrapWidth,
+			st.FoldedRanges, firstVis)
+	} else if len(st.FoldedRanges) > 0 {
+		firstLogical = visibleToLogical(
+			firstVis, st.FoldedRanges)
+	} else {
+		firstLogical = firstVis
+	}
+	frame.stickyLines = findScopeHeaders(
+		cfg.Buffer, firstLogical, stickyMax, tw)
+}
+
+func clampScroll(st *editorState, cfg EditorCfg, frame *editorFrameData, lh float32) {
 	if st.ScrollY != st.ScrollY { // NaN
 		st.ScrollY = 0
 	}
@@ -377,7 +600,11 @@ func clampScroll(st *editorState, cfg EditorCfg, lh float32) {
 		st.ScrollY = 0
 		return
 	}
-	maxScroll := float32(cfg.Buffer.LineCount())*lh - cfg.Height
+	total := frame.totalVisRows
+	if total <= 0 {
+		total = cfg.Buffer.LineCount()
+	}
+	maxScroll := float32(total)*lh - cfg.Height
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
@@ -389,7 +616,8 @@ func clampScroll(st *editorState, cfg EditorCfg, lh float32) {
 	}
 }
 
-func ensureCursorVisible(st *editorState, frame *editorFrameData, viewportH float32) {
+func ensureCursorVisible(st *editorState, frame *editorFrameData, cfg EditorCfg) {
+	viewportH := cfg.Height
 	if !frame.valid || frame.lineHeight <= 0 {
 		return
 	}
@@ -398,7 +626,21 @@ func ensureCursorVisible(st *editorState, frame *editorFrameData, viewportH floa
 	}
 	p := st.primary()
 	lh := frame.lineHeight
-	cy := float32(p.Cursor.Line) * lh
+	visRow := p.Cursor.Line
+	if frame.wrapActive && st.Measurer != nil {
+		visRow = globalLogicalToVisualRow(
+			cfg.Buffer, st.Measurer,
+			frame.wrapWidth, st.FoldedRanges, p.Cursor.Line)
+		// Add sub-row offset for cursor within wrapped line.
+		we := &wrapEntry{Line: p.Cursor.Line}
+		lb := cfg.Buffer.Line(p.Cursor.Line)
+		we.BreakCols = computeBreaks(lb, st.Measurer,
+			frame.wrapWidth)
+		visRow += wrapCursorVisualRow(we, p.Cursor.ByteCol)
+	} else if len(st.FoldedRanges) > 0 {
+		visRow = logicalToVisible(p.Cursor.Line, st.FoldedRanges)
+	}
+	cy := float32(visRow) * lh
 	if cy < st.ScrollY {
 		st.ScrollY = cy
 	}

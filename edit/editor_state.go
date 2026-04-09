@@ -22,6 +22,16 @@ type editorState struct {
 	Measurer *text.Measurer
 	Search   searchState
 
+	// Fold state (persisted).
+	FoldedRanges []FoldRange
+
+	// View toggle overrides (0=use cfg, 1=force on, 2=force off).
+	// Actions can cycle these at runtime since EditorCfg is a
+	// value type and can't be mutated from inside Execute.
+	WhitespaceOverride   int // cycles through WhitespaceMode values
+	WrapOverride         int // 0=use cfg, 1=force on, 2=force off
+	StickyScrollOverride int // 0=use cfg, 1=force on, 2=force off
+
 	// Mouse click tracking for double/triple-click detection.
 	LastClickTime int64           // UnixMilli of last mouse-down
 	LastClickPos  buffer.Position // position of last click
@@ -51,6 +61,25 @@ type editorFrameData struct {
 	gutterW    float32
 	padLeft    float32 // padding between gutter and text
 	valid      bool    // set true by AmendLayout; OnDraw no-ops if false
+
+	// Bracket match (transient per-frame, not persisted).
+	bracketMatch [2]buffer.Position // [source, match]
+	bracketFound bool
+
+	// Wrap map (transient per-frame).
+	wrapActive   bool
+	wrapWidth    float32
+	totalVisRows int // cached total visual rows (fold+wrap aware)
+
+	// Cache keys for totalVisRows (avoid O(n) recompute each
+	// frame when nothing changed).
+	visRowsCacheWidth float32
+	visRowsCacheLines int
+	visRowsCacheFolds int
+	visRowsDirty      bool
+
+	// Sticky scroll (transient per-frame).
+	stickyLines []int
 }
 
 func loadState(w *gui.Window, id uint32) editorState {

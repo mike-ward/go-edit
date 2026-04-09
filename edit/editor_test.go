@@ -161,7 +161,7 @@ func TestEnsureCursorVisibleScrollsDown(t *testing.T) {
 		ScrollY: 0,
 	}
 	fr := &editorFrameData{lineHeight: 10, valid: true}
-	ensureCursorVisible(&st, fr, 100)
+	ensureCursorVisible(&st, fr, EditorCfg{Buffer: buffer.New(), Height: 100})
 	if st.ScrollY != 60 {
 		t.Errorf("ScrollY=%v want 60", st.ScrollY)
 	}
@@ -175,7 +175,7 @@ func TestEnsureCursorVisibleScrollsUp(t *testing.T) {
 		ScrollY: 100,
 	}
 	fr := &editorFrameData{lineHeight: 10, valid: true}
-	ensureCursorVisible(&st, fr, 100)
+	ensureCursorVisible(&st, fr, EditorCfg{Buffer: buffer.New(), Height: 100})
 	if st.ScrollY != 20 {
 		t.Errorf("ScrollY=%v want 20", st.ScrollY)
 	}
@@ -189,7 +189,7 @@ func TestEnsureCursorVisibleNoop(t *testing.T) {
 		ScrollY: 20,
 	}
 	fr := &editorFrameData{lineHeight: 10, valid: true}
-	ensureCursorVisible(&st, fr, 100)
+	ensureCursorVisible(&st, fr, EditorCfg{Buffer: buffer.New(), Height: 100})
 	if st.ScrollY != 20 {
 		t.Errorf("ScrollY=%v want 20 (unchanged)", st.ScrollY)
 	}
