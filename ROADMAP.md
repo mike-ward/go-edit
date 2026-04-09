@@ -395,18 +395,49 @@ Architectural notes:
   decreasing indent. Drawn as opaque overlay at viewport top with
   syntax highlighting. Up to `StickyScrollMax` (default 5) headers.
 
-### Phase 8 — Polish  ☐
+### Phase 8 — Polish  ☑
 
-- [ ] Drag-and-drop file open.
-- [ ] Per-language config (tab width, comment string).
-- [ ] Diagnostics gutter API (markers, squiggles) — no LSP yet, just an API
+- [ ] Drag-and-drop file open. **Blocked**: go-gui has
+      `EventFilesDropped` but no `OnFileDrop` handler in
+      EventHandlers/DrawCanvasCfg/ContainerCfg. Needs upstream push.
+- [x] Per-language config (tab width, comment string).
+- [x] Diagnostics gutter API (markers, squiggles) — no LSP yet, just an API
       surface for callers to push markers.
-- [ ] Theme: derive from go-gui theme; override per-token colors.
+- [x] Theme: derive from go-gui theme; override per-token colors.
       (Currently hardcoded to "monokai". Needs theme bridge.)
-- [ ] Accessibility: a11y tree integration via go-gui NativePlatform.
-- [ ] Help screen: keybinding to replace buffer with read-only shortcut
-      reference. Gathers bindings from DefaultKeymap + user keymaps.
-      Dismiss restores original buffer. Invoke via F1 or Ctrl+?.
+- [x] Accessibility: a11y tree integration via go-gui NativePlatform.
+- [x] Help screen: keybinding to show shortcut reference as overlay.
+      Gathers bindings from DefaultKeymap + user keymaps.
+      Dismiss via Esc or F1 again. Invoke via F1.
+
+Architectural notes:
+
+- Per-language config: `LangConfig` struct on `EditorCfg` keyed by
+  file extension (`.go`) or filename (`Makefile`). Resolution in
+  `resolveLangConfig`. `edit.toggleComment` action (Ctrl+/) toggles
+  line comments using `CommentLine` from the resolved config.
+  LangConfig tab width overrides buffer autodetect in AmendLayout.
+- Theme bridge: `EditorTheme` struct on `EditorCfg` with token colors
+  (`uint32` 0xRRGGBBAA) and UI colors (`gui.Color`). `ThemeFromGUI()`
+  derives defaults from `gui.DefaultMarkdownStyle()` code colors.
+  `resolvedTheme` built once per frame in `editorOnDraw` with
+  fallbacks to hardcoded defaults. Highlighter supports
+  `SetTokenOverrides(map[chroma.TokenType]uint32)` for theme-driven
+  syntax colors. `TokenOverridesFromTheme(EditorTheme)` bridges.
+- Diagnostics: `drawSquiggles` renders `DecoSquiggle` as wavy
+  polylines (`dc.Polyline`) with stack-allocated point buffer.
+  `drawGutterMarkers` renders `DecoGutter` as filled circles or
+  single-char icons in the gutter. Both called per visible line.
+- Accessibility: outer Column gets `AccessRoleTextArea`, label from
+  `filepath.Base(FilePath)` (or "Untitled"), `AccessStateReadOnly`
+  when read-only. DrawCanvas gets matching label + line count
+  description.
+- Help screen: `HelpActive`/`HelpScrollY` on `editorState`. Full-
+  viewport overlay drawn after all other overlays. `gatherHelp`
+  deduplicates by ActionID (top keymap layer wins), sorts by
+  category. `keyChordName` produces human-readable chord names.
+  Key interception in `editorOnKeyDown` (before find bar) and
+  `editorOnChar`. Scrollable via Up/Down/PgUp/PgDn.
 
 ### Future (post-1.0)
 

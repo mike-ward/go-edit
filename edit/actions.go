@@ -409,6 +409,29 @@ var defaultActions = map[string]Action{
 		},
 	},
 
+	// ---- comment ----
+
+	"edit.toggleComment": {
+		ID:              "edit.toggleComment",
+		PerCursor:       true,
+		PreservesAnchor: true,
+		Execute: func(cfg EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
+			toggleComment(cfg, st.primary(), buf)
+		},
+	},
+
+	// ---- help ----
+
+	"help.show": {
+		ID: "help.show",
+		Execute: func(_ EditorCfg, st *editorState, _ *buffer.Buffer, _ *gui.Window) {
+			st.HelpActive = !st.HelpActive
+			if !st.HelpActive {
+				st.HelpScrollY = 0
+			}
+		},
+	},
+
 	// ---- indent ----
 
 	"edit.indent": {

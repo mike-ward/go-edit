@@ -1,6 +1,9 @@
 package edit
 
 import (
+	"path/filepath"
+	"strconv"
+
 	"github.com/mike-ward/go-edit/edit/buffer"
 	"github.com/mike-ward/go-gui/gui"
 )
@@ -26,6 +29,8 @@ type EditorCfg struct {
 	StickyScroll     bool
 	StickyScrollMax  int // 0 = use default (5)
 	ReadOnly         bool
+	LangConfigs      map[string]LangConfig // keyed by ".ext" or filename
+	Theme            EditorTheme
 	Decorations      []buffer.DecorationProvider
 	Keymaps          []*Keymap         // pushed on top of DefaultKeymap
 	Actions          map[string]Action // additional/override actions
@@ -67,14 +72,23 @@ func Editor(cfg EditorCfg) gui.View {
 	cfg.Height = sanitizeDim(cfg.Height)
 	frame := &editorFrameData{}
 
+	a11yLabel := editorA11YLabel(cfg)
+	a11yDesc := strconv.Itoa(cfg.Buffer.LineCount()) + " lines"
+	var a11yState gui.AccessState
+	if cfg.ReadOnly {
+		a11yState = gui.AccessStateReadOnly
+	}
+
 	canvas := gui.DrawCanvas(gui.DrawCanvasCfg{
 		// ID empty → skip draw cache; OnDraw runs every frame.
-		Width:         cfg.Width,
-		Height:        cfg.Height,
-		Clip:          true,
-		OnDraw:        editorOnDraw(cfg, frame),
-		OnClick:       editorOnClick(cfg, frame),
-		OnMouseScroll: editorOnMouseScroll(cfg, frame),
+		Width:           cfg.Width,
+		Height:          cfg.Height,
+		Clip:            true,
+		A11YLabel:       a11yLabel,
+		A11YDescription: a11yDesc,
+		OnDraw:          editorOnDraw(cfg, frame),
+		OnClick:         editorOnClick(cfg, frame),
+		OnMouseScroll:   editorOnMouseScroll(cfg, frame),
 	})
 
 	return gui.Column(gui.ContainerCfg{
@@ -82,9 +96,21 @@ func Editor(cfg EditorCfg) gui.View {
 		Width:       cfg.Width,
 		Height:      cfg.Height,
 		Clip:        true,
+		A11YRole:    gui.AccessRoleTextArea,
+		A11YLabel:   a11yLabel,
+		A11YState:   a11yState,
 		OnKeyDown:   editorOnKeyDown(cfg, frame),
 		OnChar:      editorOnChar(cfg, frame),
 		AmendLayout: editorAmendLayout(cfg, frame),
 		Content:     []gui.View{canvas},
 	})
+}
+
+// editorA11YLabel returns an accessibility label from the
+// buffer's file path, or "Untitled" if empty.
+func editorA11YLabel(cfg EditorCfg) string {
+	if fp := cfg.Buffer.Props.FilePath; fp != "" {
+		return filepath.Base(fp)
+	}
+	return "Untitled"
 }

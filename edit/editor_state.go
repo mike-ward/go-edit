@@ -36,6 +36,10 @@ type editorState struct {
 	LastClickTime int64           // UnixMilli of last mouse-down
 	LastClickPos  buffer.Position // position of last click
 	ClickCount    int             // 1=single, 2=double, 3=triple
+
+	// Help screen overlay.
+	HelpActive  bool
+	HelpScrollY float32
 }
 
 // primary returns a pointer to the primary cursor (index 0).
@@ -80,6 +84,9 @@ type editorFrameData struct {
 
 	// Sticky scroll (transient per-frame).
 	stickyLines []int
+
+	// Help entries (computed once, shared across closures).
+	helpEntries []helpEntry
 }
 
 func loadState(w *gui.Window, id uint32) editorState {

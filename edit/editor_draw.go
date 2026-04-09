@@ -15,24 +15,6 @@ type selInfo struct {
 	hasSel bool
 }
 
-// bracketMatchColor highlights the matching bracket pair.
-var bracketMatchColor = gui.RGBA(255, 255, 0, 40)
-
-// selectionBgColor is the background fill for selected text.
-var selectionBgColor = gui.RGBA(51, 144, 255, 96)
-
-// matchBgColor highlights all search matches.
-var matchBgColor = gui.RGBA(255, 200, 0, 60)
-
-// currentMatchBgColor highlights the current/active search match.
-var currentMatchBgColor = gui.RGBA(255, 150, 0, 120)
-
-// findBarBgColor is the find bar background.
-var findBarBgColor = gui.RGBA(40, 40, 40, 230)
-
-// findBarBorderColor is the find bar border.
-var findBarBorderColor = gui.RGBA(80, 80, 80, 255)
-
 // editorOnDraw returns a DrawCanvas OnDraw closure. The closure reads
 // per-frame data from frame (populated by AmendLayout) and renders
 // only the visible line range to dc.
@@ -46,10 +28,23 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 		if lh <= 0 {
 			return
 		}
-		theme := gui.CurrentTheme()
-		monoStyle := theme.M3
+		guiTheme := gui.CurrentTheme()
+		monoStyle := guiTheme.M3
+
+		// Help overlay replaces all buffer rendering.
+		if st.HelpActive && st.Measurer != nil {
+			drawHelp(dc, frame.helpEntries, st.HelpScrollY,
+				lh, st.Measurer.Advance(), monoStyle)
+			return
+		}
+
+		rt := resolveEditorTheme(cfg.Theme)
 		gutterStyle := monoStyle
-		gutterStyle.Color = theme.ColorBorder
+		if rt.gutterFg.IsSet() {
+			gutterStyle.Color = rt.gutterFg
+		} else {
+			gutterStyle.Color = guiTheme.ColorBorder
+		}
 
 		buf := cfg.Buffer
 		total := buf.LineCount()
@@ -111,20 +106,26 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 				if cfg.ShowLineNumbers && sr == 0 {
 					drawGutter(dc, cfg, frame, folds,
 						i, y, gutterStyle, foldStyle)
+					drawGutterMarkers(dc, decos, i,
+						frame.gutterW, frame.padLeft,
+						y, lh, st.Measurer)
 				}
 
-				drawSearchHighlights(dc, &st, i,
+				drawSearchHighlights(dc, &st, &rt, i,
 					lineBytes, subStart, subEnd,
 					textX, y, lh)
 				drawSelections(dc, sels, i,
 					lineBytes, subStart, subEnd,
-					textX, y, lh, st.Measurer)
+					textX, y, lh, st.Measurer, rt.selectionBg)
 				drawBracketHighlights(dc, frame, i,
 					subStart, subEnd, lineBytes,
-					textX, y, lh, st.Measurer)
+					textX, y, lh, st.Measurer, rt.bracketMatchBg)
 				drawLineText(dc, lineBytes, breaks,
 					subStart, subEnd, i, textX, y,
 					decos, monoStyle, st.Measurer)
+				drawSquiggles(dc, decos, i, lineBytes,
+					subStart, subEnd, textX, y, lh,
+					st.Measurer)
 
 				if sr == 0 && cfg.EnableFolding &&
 					isFoldHeader(folds, i) {
@@ -152,24 +153,26 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 
 		drawCursors(dc, cfg, frame, &st, buf, folds,
 			hasFolds, wrapOn, textX, firstVis, lastVis,
-			lh, monoStyle)
+			lh, monoStyle, &rt)
 
 		// Gutter separator.
 		if cfg.ShowLineNumbers {
 			dc.Line(frame.gutterW, 0, frame.gutterW, dc.Height,
-				theme.ColorBorder, 1)
+				guiTheme.ColorBorder, 1)
 		}
 
 		// Sticky scroll overlay.
 		if len(frame.stickyLines) > 0 {
 			drawStickyScroll(dc, cfg, frame, &st,
-				st.Measurer, lh, monoStyle, decos)
+				st.Measurer, lh, monoStyle, decos, &rt)
 		}
 
 		// Find bar overlay.
 		if st.Search.Active {
-			drawFindBar(dc, cfg, &st, st.Measurer, lh, monoStyle)
+			drawFindBar(dc, cfg, &st, st.Measurer, lh,
+				monoStyle, &rt)
 		}
+
 	}
 }
 
@@ -309,6 +312,7 @@ func drawGutter(
 func drawSearchHighlights(
 	dc *gui.DrawContext,
 	st *editorState,
+	rt *resolvedTheme,
 	line int,
 	lineBytes []byte,
 	subStart, subEnd int,
@@ -322,7 +326,7 @@ func drawSearchHighlights(
 			continue
 		}
 		drawSelectionBg(dc, mr, line, lineBytes, textX, y, lh,
-			st.Measurer, matchBgColor)
+			st.Measurer, rt.searchMatchBg)
 	}
 	idx := st.Search.CurrentMatch
 	if idx >= 0 && idx < len(st.Search.Matches) {
@@ -330,7 +334,7 @@ func drawSearchHighlights(
 		if cm.Start.Line <= line && cm.End.Line >= line &&
 			rangeOverlapsSubRow(cm, line, subStart, subEnd) {
 			drawSelectionBg(dc, cm, line, lineBytes, textX, y,
-				lh, st.Measurer, currentMatchBgColor)
+				lh, st.Measurer, rt.currentMatchBg)
 		}
 	}
 }
@@ -345,13 +349,14 @@ func drawSelections(
 	subStart, subEnd int,
 	textX, y, lh float32,
 	m *text.Measurer,
+	selColor gui.Color,
 ) {
 	for ci := range sels {
 		if sels[ci].hasSel &&
 			rangeOverlapsSubRow(sels[ci].sel, line,
 				subStart, subEnd) {
 			drawSelectionBg(dc, sels[ci].sel, line,
-				lineBytes, textX, y, lh, m, selectionBgColor)
+				lineBytes, textX, y, lh, m, selColor)
 		}
 	}
 }
@@ -383,6 +388,7 @@ func drawBracketHighlights(
 	lineBytes []byte,
 	textX, y, lh float32,
 	m *text.Measurer,
+	bmColor gui.Color,
 ) {
 	if !frame.bracketFound {
 		return
@@ -391,8 +397,7 @@ func drawBracketHighlights(
 		if bp.Line == line &&
 			bp.ByteCol >= subStart && bp.ByteCol < subEnd {
 			bx := textX + m.XForColumn(lineBytes, bp.ByteCol)
-			dc.FilledRect(bx, y, m.Advance(), lh,
-				bracketMatchColor)
+			dc.FilledRect(bx, y, m.Advance(), lh, bmColor)
 		}
 	}
 }
@@ -447,6 +452,7 @@ func drawCursors(
 	firstVis, lastVis int,
 	lh float32,
 	style gui.TextStyle,
+	rt *resolvedTheme,
 ) {
 	for ci := range st.Cursors {
 		cs := &st.Cursors[ci]
@@ -485,15 +491,13 @@ func drawCursors(
 					cs.Cursor.ByteCol) -
 				st.Measurer.XForColumn(lb, subStart)
 		}
-		dc.FilledRect(cx, cy, 1, lh, style.Color)
+		curColor := style.Color
+		if rt.cursorColor.IsSet() {
+			curColor = rt.cursorColor
+		}
+		dc.FilledRect(cx, cy, 1, lh, curColor)
 	}
 }
-
-// stickyBgColor is the background for the sticky scroll area.
-var stickyBgColor = gui.RGBA(30, 30, 30, 240)
-
-// stickyBorderColor is the bottom border of the sticky area.
-var stickyBorderColor = gui.RGBA(60, 60, 60, 255)
 
 // drawStickyScroll draws pinned scope headers at the top.
 func drawStickyScroll(
@@ -505,6 +509,7 @@ func drawStickyScroll(
 	lh float32,
 	baseStyle gui.TextStyle,
 	decos []buffer.Decoration,
+	rt *resolvedTheme,
 ) {
 	if m == nil || lh <= 0 || len(frame.stickyLines) == 0 {
 		return
@@ -513,8 +518,8 @@ func drawStickyScroll(
 	stickyH := float32(len(frame.stickyLines)) * lh
 
 	// Background.
-	dc.FilledRect(0, 0, dc.Width, stickyH, stickyBgColor)
-	dc.Line(0, stickyH, dc.Width, stickyH, stickyBorderColor, 1)
+	dc.FilledRect(0, 0, dc.Width, stickyH, rt.stickyBg)
+	dc.Line(0, stickyH, dc.Width, stickyH, rt.stickyBorder, 1)
 
 	gutterStyle := baseStyle
 	gutterStyle.Color = gui.CurrentTheme().ColorBorder
@@ -708,6 +713,7 @@ func drawFindBar(
 	m *text.Measurer,
 	lh float32,
 	baseStyle gui.TextStyle,
+	rt *resolvedTheme,
 ) {
 	if m == nil {
 		return
@@ -746,8 +752,8 @@ func drawFindBar(
 	barY := pad
 
 	// Background + border.
-	dc.FilledRect(barX, barY, barW, barH, findBarBgColor)
-	dc.Rect(barX, barY, barW, barH, findBarBorderColor, 1)
+	dc.FilledRect(barX, barY, barW, barH, rt.findBarBg)
+	dc.Rect(barX, barY, barW, barH, rt.findBarBorder, 1)
 
 	// Styles.
 	dimStyle := baseStyle
@@ -877,4 +883,122 @@ func matchCountStr(ss *searchState) string {
 		suffix = "+"
 	}
 	return strconv.Itoa(cur) + " of " + strconv.Itoa(total) + suffix
+}
+
+// drawSquiggles draws wavy underlines for DecoSquiggle decos
+// on the given line, clipped to [subStart, subEnd).
+func drawSquiggles(
+	dc *gui.DrawContext,
+	decos []buffer.Decoration,
+	line int,
+	lineBytes []byte,
+	subStart, subEnd int,
+	textX, y, lh float32,
+	m *text.Measurer,
+) {
+	if m == nil {
+		return
+	}
+	for j := range decos {
+		d := &decos[j]
+		if d.Kind != buffer.DecoSquiggle {
+			continue
+		}
+		if d.Range.Start.Line > line || d.Range.End.Line < line {
+			continue
+		}
+		if d.SquiggleColor == 0 {
+			continue
+		}
+		startCol := 0
+		if d.Range.Start.Line == line {
+			startCol = d.Range.Start.ByteCol
+		}
+		endCol := len(lineBytes)
+		if d.Range.End.Line == line {
+			endCol = d.Range.End.ByteCol
+		}
+		// Clip to sub-row.
+		startCol = max(startCol, subStart)
+		endCol = min(endCol, subEnd)
+		if startCol >= endCol {
+			continue
+		}
+
+		sx := textX + m.XForColumn(lineBytes, startCol)
+		ex := textX + m.XForColumn(lineBytes, endCol)
+		if ex <= sx {
+			continue
+		}
+
+		// Generate wavy polyline.
+		const amp float32 = 1.5 // wave amplitude
+		const wl float32 = 4.0  // wavelength
+		baseY := y + lh - 2     // just above bottom
+		width := ex - sx
+		steps := min(max(int(width/wl)+1, 2), 4096)
+		// Stack-alloc for typical case.
+		var ptsBuf [256]float32
+		n := steps * 2
+		var pts []float32
+		if n <= len(ptsBuf) {
+			pts = ptsBuf[:n]
+		} else {
+			pts = make([]float32, n)
+		}
+		for i := range steps {
+			x := sx + float32(i)*wl
+			if x > ex {
+				x = ex
+			}
+			yOff := amp
+			if i%2 == 0 {
+				yOff = -amp
+			}
+			pts[i*2] = x
+			pts[i*2+1] = baseY + yOff
+		}
+		dc.Polyline(pts, decoColorToGUI(d.SquiggleColor), 1)
+	}
+}
+
+// drawGutterMarkers draws diagnostic markers in the gutter for
+// DecoGutter decos on the given line.
+func drawGutterMarkers(
+	dc *gui.DrawContext,
+	decos []buffer.Decoration,
+	line int,
+	gutterW, padLeft, y, lh float32,
+	m *text.Measurer,
+) {
+	if m == nil || gutterW <= 0 {
+		return
+	}
+	adv := m.Advance()
+	for j := range decos {
+		d := &decos[j]
+		if d.Kind != buffer.DecoGutter {
+			continue
+		}
+		if d.Range.Start.Line != line {
+			continue
+		}
+		if d.GutterColor == 0 {
+			continue
+		}
+		color := decoColorToGUI(d.GutterColor)
+		cx := padLeft / 2
+		if cx < adv*0.4 {
+			cx = adv * 0.4
+		}
+		cy := y + lh/2
+		// If GutterIcon is set, render it as text.
+		if len(d.GutterIcon) > 0 {
+			dc.Text(cx-adv/2, y, d.GutterIcon,
+				gui.TextStyle{Color: color})
+			continue
+		}
+		r := adv * 0.3
+		dc.FilledCircle(cx, cy, r, color)
+	}
 }

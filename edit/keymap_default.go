@@ -72,6 +72,13 @@ var DefaultKeymap = &Keymap{
 		{Key: gui.KeyH, Modifiers: gui.ModCtrl, ActionID: "find.openReplace"},
 		{Key: gui.KeyH, Modifiers: gui.ModSuper, ActionID: "find.openReplace"},
 
+		// ---- help ----
+		{Key: gui.KeyF1, ActionID: "help.show"},
+
+		// ---- comment ----
+		{Key: gui.KeySlash, Modifiers: gui.ModCtrl, ActionID: "edit.toggleComment"},
+		{Key: gui.KeySlash, Modifiers: gui.ModSuper, ActionID: "edit.toggleComment"},
+
 		// ---- undo / redo ----
 		{Key: gui.KeyZ, Modifiers: gui.ModCtrl, ActionID: "edit.undo"},
 		{Key: gui.KeyZ, Modifiers: gui.ModSuper, ActionID: "edit.undo"},

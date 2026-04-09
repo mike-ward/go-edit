@@ -51,7 +51,10 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		}
 
 		// Sync tab width from buffer indent config each frame.
-		if tw := cfg.Buffer.Props.IndentStyle.Width; tw > 0 {
+		// LangConfig overrides autodetected indent.
+		if tw := resolveLangConfig(cfg).TabWidth; tw > 0 {
+			st.Measurer.TabWidth = tw
+		} else if tw := cfg.Buffer.Props.IndentStyle.Width; tw > 0 {
 			st.Measurer.TabWidth = tw
 		}
 
@@ -142,6 +145,16 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		computeBracketMatch(cfg, &st, frame)
 		computeStickyScroll(cfg, &st, frame, lh)
 
+		// Help entries (computed once, reused across frames).
+		if frame.helpEntries == nil {
+			hs := &KeymapStack{}
+			hs.Push(DefaultKeymap)
+			for _, km := range cfg.Keymaps {
+				hs.Push(km)
+			}
+			frame.helpEntries = gatherHelp(hs)
+		}
+
 		frame.state = st
 		frame.lineHeight = lh
 		frame.gutterW = gutterW
@@ -175,9 +188,17 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 	maps.Copy(actions, cfg.Actions)
 
 	return func(layout *gui.Layout, e *gui.Event, w *gui.Window) {
-		// When find bar is active, route keys there first.
+		// Overlay intercepts: help and find bar get first
+		// crack at key events, using a single state load.
 		{
 			st := loadState(w, cfg.IDFocus)
+			if st.HelpActive {
+				handleHelpKey(&st, e, frame.lineHeight,
+					cfg.Height, frame.helpEntries)
+				storeState(w, cfg.IDFocus, st)
+				e.IsHandled = true
+				return
+			}
 			if st.Search.Active {
 				if handleSearchKey(cfg, &st, cfg.Buffer, e) {
 					ensureCursorVisible(&st, frame, cfg)
@@ -251,9 +272,14 @@ func editorOnChar(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.
 			return
 		}
 
-		// When find bar is active, route chars there.
+		// Overlay intercepts: help consumes all chars;
+		// find bar routes to search input.
 		{
 			st := loadState(w, cfg.IDFocus)
+			if st.HelpActive {
+				e.IsHandled = true
+				return
+			}
 			if st.Search.Active {
 				handleSearchChar(&st, cfg.Buffer, r)
 				storeState(w, cfg.IDFocus, st)
@@ -322,6 +348,14 @@ func editorOnMouseScroll(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout
 			return
 		}
 		st := loadState(w, cfg.IDFocus)
+		if st.HelpActive {
+			st.HelpScrollY -= dy * frame.lineHeight * 3
+			clampHelpScroll(&st, frame.helpEntries,
+				frame.lineHeight, cfg.Height)
+			storeState(w, cfg.IDFocus, st)
+			e.IsHandled = true
+			return
+		}
 		// Positive ScrollY means scroll up; invert for natural feel.
 		st.ScrollY -= dy * frame.lineHeight * 3
 		clampScroll(&st, cfg, frame, frame.lineHeight)

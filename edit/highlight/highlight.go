@@ -24,14 +24,15 @@ type Token struct {
 // tokenizes the buffer on demand, caches per-line tokens, and
 // invalidates on edits.
 type Highlighter struct {
-	mu         sync.Mutex
-	lexer      chroma.Lexer
-	style      *chroma.Style
-	buf        *buffer.Buffer
-	tokens     [][]Token // per-line cache
-	valid      bool      // false → retokenize on next Decorate
-	invalidate func()    // RequestRedraw thunk; may be nil
-	removeEdit func()    // remove handle for OnEdit observer
+	mu             sync.Mutex
+	lexer          chroma.Lexer
+	style          *chroma.Style
+	buf            *buffer.Buffer
+	tokens         [][]Token // per-line cache
+	valid          bool      // false → retokenize on next Decorate
+	invalidate     func()    // RequestRedraw thunk; may be nil
+	removeEdit     func()    // remove handle for OnEdit observer
+	overrideColors map[chroma.TokenType]uint32
 }
 
 // New creates a Highlighter for buf. Language is autodetected
@@ -73,6 +74,15 @@ func New(buf *buffer.Buffer, language string, style *chroma.Style) *Highlighter 
 func (h *Highlighter) SetInvalidateFunc(fn func()) {
 	h.mu.Lock()
 	h.invalidate = fn
+	h.mu.Unlock()
+}
+
+// SetTokenOverrides installs per-token-type color overrides.
+// These take priority over the chroma style. Pass nil to clear.
+func (h *Highlighter) SetTokenOverrides(m map[chroma.TokenType]uint32) {
+	h.mu.Lock()
+	h.overrideColors = m
+	h.valid = false
 	h.mu.Unlock()
 }
 
@@ -140,8 +150,7 @@ func (h *Highlighter) retokenize() {
 	col := 0
 
 	for tok := iter(); tok.Type != chroma.EOFType; tok = iter() {
-		entry := h.style.Get(tok.Type)
-		fg, bold, italic := mapEntry(entry)
+		fg, bold, italic := h.resolveToken(tok.Type)
 
 		// A single chroma token can span multiple lines
 		// (e.g. multi-line strings/comments).
@@ -172,6 +181,18 @@ func (h *Highlighter) retokenize() {
 	}
 
 	h.tokens = tokens
+}
+
+// resolveToken returns the color for a token type, checking
+// overrides first, then falling back to the chroma style.
+// Must be called with h.mu held.
+func (h *Highlighter) resolveToken(
+	tt chroma.TokenType,
+) (fg uint32, bold, italic bool) {
+	if c, ok := h.overrideColors[tt]; ok && c != 0 {
+		return c, false, false
+	}
+	return mapEntry(h.style.Get(tt))
 }
 
 // mapEntry extracts RGBA + style flags from a chroma StyleEntry.
