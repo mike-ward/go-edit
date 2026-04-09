@@ -19,6 +19,13 @@ type EditorCfg struct {
 	Height          float32
 	ShowLineNumbers bool
 	ReadOnly        bool
+	Decorations     []buffer.DecorationProvider
+	Keymaps         []*Keymap         // pushed on top of DefaultKeymap
+	Actions         map[string]Action // additional/override actions
+	// OnInvalidate is called once with a RequestRedraw thunk.
+	// Decoration providers that do background work should store
+	// the thunk and call it when new data is ready.
+	OnInvalidate func(func())
 }
 
 // minDimension is the smallest viewport width/height the editor will

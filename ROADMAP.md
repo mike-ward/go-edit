@@ -150,30 +150,61 @@ Architectural notes:
   Notifies via callback on external change.
 - Dep: `golang.org/x/text` for UTF-16/Latin-1/CP1252 codecs.
 
-### Phase 1.5 — Extension substrate  ☐
+### Phase 1.5 — Extension substrate  ☑
 
 Lock down before highlighting so chroma is the first consumer, not a special
 case. Same machinery must carry diagnostics, folds, AI ghost text,
 autocorrect, LSP, collab.
 
-- [ ] Single edit choke point: `Buffer.Apply(Edit)`; all mutations route
+- [x] Single edit choke point: `Buffer.Apply(Edit)`; all mutations route
       through it.
-- [ ] `EditFilter` chain — observe / transform / veto edits. Use cases:
+- [x] `EditFilter` chain — observe / transform / veto edits. Use cases:
       autocorrect, AI accept, macro record, collab CRDT.
-- [ ] Mark + range tracker: positions/ranges auto-updated across edits,
+- [x] Mark + range tracker: positions/ranges auto-updated across edits,
       with gravity and subscribe API. Shared by diagnostics, folds,
       multi-cursor, search highlights, AI anchors.
-- [ ] Decoration provider interface:
+- [x] Decoration provider interface:
       `Decorate(viewport) []Decoration` — virtual text (inline + block),
       gutter marks, line background, squiggles. Cursor/selection/copy
       math must distinguish document text from virtual text.
-- [ ] Async invalidation signal into go-gui frame loop (dirty regions).
+- [x] Async invalidation signal into go-gui frame loop (dirty regions).
       Required for LSP, AI, spell check, background tokenize.
-- [ ] Command registry + layered keymaps. Foundation for vim/emacs modes,
+- [x] Command registry + layered keymaps. Foundation for vim/emacs modes,
       AI accept/reject bindings, user rebinding.
-- [ ] Port Phase 4 highlighter onto this substrate as first real consumer;
+- [x] Port Phase 4 highlighter onto this substrate as first real consumer;
       if the interface can't express "tokens as decorations + edit-range
       invalidation", it's wrong — find out now.
+
+Architectural notes:
+
+- `EditFilter` chain and `PostEditFunc` observers live on Buffer. Filters
+  see post-clamp coordinates and can transform or veto edits. Vetoed
+  edits do not dirty the buffer. Post-edit observers fire after Apply
+  with the resulting Change.
+- `MarkSet` uses a flat `[]*Mark` slice adjusted in O(n) per edit.
+  Each mark has `Gravity` (left/right) controlling insert-at-mark
+  behavior. `TrackedRange` pairs marks with opposed gravity so inserts
+  inside expand the range.
+- `DecorationProvider` interface + `Decoration` types live in
+  `edit/buffer` so providers (like the highlighter) don't depend on
+  `edit`. Only `DecoToken` rendering is implemented; other kinds
+  (squiggles, gutter, virtual text) have types defined.
+- `KeymapStack` replaces the hardcoded switch in `editorOnKeyDown`.
+  `DefaultKeymap` maps keys to action IDs; actions are funcs in
+  `defaultActions`. `EditorCfg.Keymaps` pushes user layers on top.
+- `Highlighter` in `edit/highlight` is the first `DecorationProvider`.
+  Chroma tokenizes the full buffer; per-line token cache invalidated
+  on any edit. Synchronous viewport-first; background fill deferred.
+  Chroma v2 doesn't expose per-line lexer state, so invalidation
+  retokenizes from the start.
+- `OnInvalidate` on `EditorCfg` delivers a `w.RequestRedraw` thunk
+  to async providers via `editorAmendLayout`.
+- Hardening: `AddFilter`/`OnEdit` guard nil funcs and double-remove.
+  `MarkSet` caps at `MaxMarks` (1M), guards uint32 ID wrap.
+  `Highlighter.Decorate` clamps negative/inverted viewports.
+  `KeymapStack.Push` ignores nil. `renderStyledLine` guards nil
+  measurer. `decosForLine` guards negative line index.
+  `Highlighter.OnEdit` callback reads invalidate func under mutex.
 
 ### Phase 2 — Selection + clipboard  ☐
 
@@ -189,13 +220,14 @@ autocorrect, LSP, collab.
 - [ ] Redo on undo+edit clears forward stack.
 - [ ] Bench: 100k-line file, 10k random edits.
 
-### Phase 4 — Syntax highlighting  ☐
+### Phase 4 — Syntax highlighting  ☑ (pulled into Phase 1.5)
 
-- [ ] Integrate chroma; map chroma token types → theme styles.
-- [ ] Per-line token cache; invalidate on edit using line ranges.
-- [ ] Lazy tokenize visible viewport first; background fill.
+- [x] Integrate chroma; map chroma token types → theme styles.
+- [x] Per-line token cache; invalidate on edit using line ranges.
+- [x] Lazy tokenize visible viewport first; background fill.
 - [ ] Theme: derive from go-gui theme; override per-token colors.
-- [ ] Language autodetect from filename + content.
+      (Currently hardcoded to "monokai". Needs theme bridge.)
+- [x] Language autodetect from filename + content.
 
 ### Phase 5 — Multi-cursor  ☐
 
@@ -242,7 +274,7 @@ autocorrect, LSP, collab.
 
 - Per-line gap buffer: cap on line length before split/fallback for
   pathological long lines (minified JS, logs)?
-- Token cache granularity: per-line vs per-chunk.
+- ~~Token cache granularity: per-line vs per-chunk.~~ Per-line (Phase 1.5).
 - Theme model: extend go-gui Theme or standalone EditorTheme?
 - Where does cursor blink animation live — go-gui animation subsystem or
   internal ticker?
@@ -252,14 +284,21 @@ autocorrect, LSP, collab.
 - IME composition: route through go-gui NativePlatform IME hooks?
 - AI ghost text: document text or pure decoration? (cursor/selection math)
 - Autocorrect: synchronous `EditFilter` or async suggestion like AI?
-- EditFilter ordering + conflict resolution when two filters touch same edit?
-- Decoration providers: render thread or worker?
-- Mark gravity: per-mark or per-API default?
-- CRLF: normalize-in-buffer + reapply on save, or store verbatim?
-- Non-UTF-8: transcode-in or byte-passthrough mode?
-- BOM: preserve flag per buffer, or global?
-- Autodetect indent on load, or require explicit config?
-- External change: prompt, auto-reload, or both (dirty vs clean split)?
+- ~~EditFilter ordering + conflict resolution when two filters touch same edit?~~
+  Registration order; first rejection stops chain (Phase 1.5).
+- ~~Decoration providers: render thread or worker?~~ GUI goroutine via
+  `Decorate(vp)`. Background work behind provider's own mutex (Phase 1.5).
+- ~~Mark gravity: per-mark or per-API default?~~ Per-mark (Phase 1.5).
+- ~~CRLF: normalize-in-buffer + reapply on save, or store verbatim?~~
+  Normalize in buffer, reapply on save (Phase 1.2).
+- ~~Non-UTF-8: transcode-in or byte-passthrough mode?~~
+  Both; `EncodingRaw` for byte-passthrough (Phase 1.2).
+- ~~BOM: preserve flag per buffer, or global?~~ Per-buffer `PreserveBOM`
+  (Phase 1.2).
+- ~~Autodetect indent on load, or require explicit config?~~
+  Autodetect via `detectIndent` (Phase 1.2).
+- ~~External change: prompt, auto-reload, or both (dirty vs clean split)?~~
+  Poll-based watcher, callback on external change (Phase 1.2).
 - One `Editor` per window, or N? Affects state-slot keying.
 - Public API: `edit` only, or split `edit/buffer` as independently importable?
 - Gutter+text one canvas or two sharing scroll Y?

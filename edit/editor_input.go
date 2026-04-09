@@ -1,7 +1,9 @@
 package edit
 
 import (
+	"maps"
 	"strconv"
+	"strings"
 	"unicode"
 	"unicode/utf8"
 
@@ -10,11 +12,19 @@ import (
 	"github.com/mike-ward/go-gui/gui"
 )
 
+// isEditAction reports whether an action ID is a mutating action
+// that should be blocked in read-only mode.
+func isEditAction(id string) bool {
+	return strings.HasPrefix(id, "edit.")
+}
+
 // editorAmendLayout runs each frame with *Window access. It loads
 // persistent state, lazily builds the text Measurer, recomputes
 // per-frame layout metrics, and publishes them via the frame struct
 // so OnDraw can read them.
 func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.Window) {
+	invalidateSent := false
+
 	return func(layout *gui.Layout, w *gui.Window) {
 		st := loadState(w, cfg.IDFocus)
 		if st.Measurer == nil {
@@ -24,6 +34,13 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 				frame.valid = false
 				return
 			}
+		}
+
+		// Provide RequestRedraw thunk to async decoration
+		// providers once.
+		if !invalidateSent && cfg.OnInvalidate != nil {
+			cfg.OnInvalidate(w.RequestRedraw)
+			invalidateSent = true
 		}
 
 		lh := st.Measurer.LineHeight()
@@ -52,71 +69,45 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 }
 
 func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.Event, *gui.Window) {
+	// Build keymap stack and action registry once at closure
+	// creation time.
+	stack := &KeymapStack{}
+	stack.Push(DefaultKeymap)
+	for _, km := range cfg.Keymaps {
+		stack.Push(km)
+	}
+
+	actions := make(map[string]Action, len(defaultActions)+2)
+	maps.Copy(actions, defaultActions)
+	// Page actions need frame for viewport height.
+	pu := pageUpAction(cfg, frame)
+	pd := pageDownAction(cfg, frame)
+	actions[pu.ID] = pu
+	actions[pd.ID] = pd
+	maps.Copy(actions, cfg.Actions)
+
 	return func(layout *gui.Layout, e *gui.Event, w *gui.Window) {
-		st := loadState(w, cfg.IDFocus)
-		buf := cfg.Buffer
-
-		handled := true
-		moved := false
-		resetDesired := true
-
-		switch e.KeyCode {
-		case gui.KeyLeft:
-			moveLeft(&st, buf)
-			moved = true
-		case gui.KeyRight:
-			moveRight(&st, buf)
-			moved = true
-		case gui.KeyUp:
-			moveUp(&st, buf, 1)
-			moved = true
-			resetDesired = false
-		case gui.KeyDown:
-			moveDown(&st, buf, 1)
-			moved = true
-			resetDesired = false
-		case gui.KeyHome:
-			st.Cursor.ByteCol = 0
-			moved = true
-		case gui.KeyEnd:
-			st.Cursor.ByteCol = len(buf.Line(st.Cursor.Line))
-			moved = true
-		case gui.KeyPageUp:
-			moveUp(&st, buf, pageLines(frame, cfg.Height))
-			moved = true
-			resetDesired = false
-		case gui.KeyPageDown:
-			moveDown(&st, buf, pageLines(frame, cfg.Height))
-			moved = true
-			resetDesired = false
-		case gui.KeyBackspace:
-			if !cfg.ReadOnly {
-				backspace(&st, buf)
-				moved = true
-			}
-		case gui.KeyDelete:
-			if !cfg.ReadOnly {
-				deleteForward(&st, buf)
-				moved = true
-			}
-		case gui.KeyEnter:
-			if !cfg.ReadOnly {
-				insertNewline(&st, buf)
-				moved = true
-			}
-		default:
-			handled = false
-		}
-
-		if !handled {
+		actionID, ok := stack.Resolve(e.KeyCode, e.Modifiers)
+		if !ok {
 			return
 		}
-		if resetDesired {
+		action, ok := actions[actionID]
+		if !ok {
+			return
+		}
+
+		// Block edit actions in read-only mode.
+		if cfg.ReadOnly && isEditAction(actionID) {
+			return
+		}
+
+		st := loadState(w, cfg.IDFocus)
+		action.Execute(cfg, &st, cfg.Buffer)
+
+		if !action.PreservesDesiredCol {
 			st.DesiredCol = st.Cursor.ByteCol
 		}
-		if moved {
-			ensureCursorVisible(&st, frame, cfg.Height)
-		}
+		ensureCursorVisible(&st, frame, cfg.Height)
 		storeState(w, cfg.IDFocus, st)
 		e.IsHandled = true
 	}

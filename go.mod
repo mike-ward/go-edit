@@ -3,13 +3,13 @@ module github.com/mike-ward/go-edit
 go 1.26.0
 
 require (
+	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/mike-ward/go-glyph v1.6.4
 	github.com/mike-ward/go-gui v0.9.2
 	golang.org/x/text v0.36.0
 )
 
 require (
-	github.com/alecthomas/chroma/v2 v2.23.1 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276 // indirect
 	github.com/go-pdf/fpdf v0.9.0 // indirect

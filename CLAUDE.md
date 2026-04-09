@@ -35,8 +35,9 @@ Tests run fully headless. `examples/basic` is the only CGO-linked target.
 
 ### Package layout
 
-- `edit/` — `EditorCfg`, `Editor(cfg) gui.View` factory, closures for draw/input/amend. State structs in `editor_state.go`.
-- `edit/buffer/` — document model. `Buffer` is a slice of lines (plain `[]byte` for now; gap buffer deferred until benchmarks justify the rewrite). The single mutation choke point is `Buffer.Apply(Edit) Change`. `Load(io.Reader)` caps at `MaxLoadBytes` (256 MiB).
+- `edit/` — `EditorCfg`, `Editor(cfg) gui.View` factory, closures for draw/input/amend. State structs in `editor_state.go`. Keymap/action system in `keymap.go`, `keymap_default.go`, `actions.go`.
+- `edit/buffer/` — document model. `Buffer` is a slice of lines (plain `[]byte` for now; gap buffer deferred until benchmarks justify the rewrite). The single mutation choke point is `Buffer.Apply(Edit) Change`. `Load(io.Reader)` caps at `MaxLoadBytes` (256 MiB). Extension substrate: `EditFilter` chain, `PostEditFunc` observers, `MarkSet` tracker, `DecorationProvider` interface.
+- `edit/highlight/` — chroma-based `DecorationProvider`. Full-buffer tokenization with per-line cache; invalidated on any edit via `PostEditFunc`.
 - `edit/text/` — wraps `gui.TextMeasurer`. `Measurer` caches monospace advance + line height and exposes `XForColumn` / `ColumnForX` with an ASCII fast path falling back to `glyph.Layout.HitTest`/`GetCursorPos`.
 - `edit/internal/fakewin/` — headless test fixture. `fakewin.New()` returns a `*gui.Window` with a deterministic fake `TextMeasurer` (8 px advance, 16 px line height). Event builders (`NewKeyEvent`, `NewCharEvent`, `NewScrollEvent`). Used by driver tests in `edit/editor_driver_test.go`.
 - `examples/basic/` — minimal CLI example; links the CGO backend.
@@ -77,4 +78,4 @@ Editor state is stored in `gui.StateMap[uint32, editorState](w, "edit.state", ca
 
 ## Status
 
-Phases 0, 1, and 1.2 (File I/O) are committed. Golden-frame tests are deferred until an upstream `DrawContext.Inspect()` accessor exists. The plain-`[]byte` line store will be replaced with a per-line gap buffer once bench pressure from Phase 3 (undo) justifies it. See `ROADMAP.md` for the full phase list and open questions.
+Phases 0, 1, 1.2 (File I/O), and 1.5 (Extension substrate) are committed. Phase 1.5 adds EditFilter chain, mark/range tracker, decoration provider interface, layered keymaps, async invalidation, and chroma-based syntax highlighting as the first DecorationProvider. Golden-frame tests are deferred until an upstream `DrawContext.Inspect()` accessor exists. The plain-`[]byte` line store will be replaced with a per-line gap buffer once bench pressure from Phase 3 (undo) justifies it. See `ROADMAP.md` for the full phase list and open questions.

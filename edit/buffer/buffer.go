@@ -16,9 +16,12 @@ const MaxLoadBytes = 1 << 28 // 256 MiB
 // choke point Apply. A Buffer always contains at least one line (the
 // empty line for an empty document).
 type Buffer struct {
-	lines []*line
-	Props FileProps
-	dirty bool
+	lines    []*line
+	Props    FileProps
+	dirty    bool
+	filters  []EditFilter
+	postEdit []PostEditFunc
+	marks    *MarkSet
 }
 
 // New returns an empty buffer containing a single empty line.
@@ -32,6 +35,14 @@ func New() *Buffer {
 // Dirty reports whether the buffer has been modified since the last
 // load or save.
 func (b *Buffer) Dirty() bool { return b.dirty }
+
+// Marks returns the buffer's mark set, creating it lazily.
+func (b *Buffer) Marks() *MarkSet {
+	if b.marks == nil {
+		b.marks = &MarkSet{}
+	}
+	return b.marks
+}
 
 // MarkClean clears the dirty flag, typically after a successful save.
 func (b *Buffer) MarkClean() { b.dirty = false }
@@ -175,8 +186,19 @@ func (b *Buffer) String() string { return string(b.Bytes()) }
 // It tolerates out-of-range columns by clamping. It never panics on
 // user input. Panic policy locked in Phase -1.
 func (b *Buffer) Apply(e Edit) Change {
-	b.dirty = true
 	e.Range = b.clampRange(e.Range)
+
+	// Run filter chain. Any rejection aborts the edit.
+	for _, f := range b.filters {
+		if f == nil {
+			continue
+		}
+		if f(b, &e) == FilterReject {
+			return Change{}
+		}
+	}
+
+	b.dirty = true
 	old := b.bytesInRange(e.Range)
 
 	// Delete the range.
@@ -185,11 +207,23 @@ func (b *Buffer) Apply(e Edit) Change {
 	// Insert NewBytes at the collapsed start position.
 	endPos := b.insertAt(e.Range.Start, e.NewBytes)
 
-	return Change{
+	// Update marks for the edit.
+	b.marks.adjust(e, endPos)
+
+	c := Change{
 		Applied:      e,
 		OldBytes:     old,
 		AppliedRange: Range{Start: e.Range.Start, End: endPos},
 	}
+
+	// Notify post-edit observers.
+	for _, fn := range b.postEdit {
+		if fn != nil {
+			fn(c)
+		}
+	}
+
+	return c
 }
 
 // clampRange normalizes a range to valid buffer coordinates and

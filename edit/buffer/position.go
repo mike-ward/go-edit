@@ -19,6 +19,14 @@ func (p Position) Before(q Position) bool {
 	return p.ByteCol < q.ByteCol
 }
 
+// After reports whether p sorts strictly after q.
+func (p Position) After(q Position) bool {
+	if p.Line != q.Line {
+		return p.Line > q.Line
+	}
+	return p.ByteCol > q.ByteCol
+}
+
 // Range is a half-open [Start, End) byte span. Start <= End.
 type Range struct {
 	Start, End Position
