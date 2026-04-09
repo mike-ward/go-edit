@@ -25,6 +25,8 @@ linters:
         - name: unexported-return
   exclusions:
     generated: lax
+    paths:
+      - examples
     rules:
       - path: _test\.go
         linters:
