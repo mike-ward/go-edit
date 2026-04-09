@@ -311,11 +311,47 @@ Architectural notes:
   same then deletes in reverse order. Paste splits by `\n` when line
   count matches cursor count; otherwise pastes full text at each cursor.
 
-### Phase 6 — Search / replace  ☐
+### Phase 6 — Search / replace  ☑
 
-- [ ] In-editor find bar; literal + regex; case toggle.
-- [ ] Find next/prev, highlight all matches.
-- [ ] Replace, replace all (single undo entry).
+- [x] In-editor find bar; literal + regex; case toggle.
+- [x] Find next/prev, highlight all matches.
+- [x] Replace, replace all (single undo entry).
+- [x] Find in selection (Alt+S toggle; auto-enabled for multi-line
+      selections).
+
+Architectural notes:
+
+- Find bar is custom-drawn inside the existing DrawCanvas (not a
+  `gui.Input` overlay). Avoids IDFocus conflicts. Rendered at
+  top-right of viewport with semi-opaque background.
+- `searchState` sub-struct on `editorState`, persisted in StateMap.
+  Contains query, replace text, flags, compiled regex cache, and
+  match list.
+- Input routing: `editorOnKeyDown` and `editorOnChar` check
+  `st.Search.Active` first and dispatch to `handleSearchKey` /
+  `handleSearchChar`. Unhandled keys fall through to normal action
+  dispatch (e.g., Ctrl+C still copies).
+- Match highlights drawn directly in `editorOnDraw` like selection
+  backgrounds. Yellow for all matches, orange for current match.
+  `matchesForLine` uses binary search on sorted match slice.
+- `findAllMatches` returns all matches via `bytes.Index` (literal)
+  or `regexp.FindAllIndex` (regex), capped at 10,000. Compiled
+  regex cached in searchState; recompiled only when query/flags
+  change.
+- Match invalidation: `editorAmendLayout` registers a `buf.OnEdit`
+  observer that sets `matchesDirty`; recompute runs on next
+  AmendLayout tick.
+- Replace-all applies in reverse position order inside one
+  `BeginGroup/EndGroup` for single undo. Regex replacement supports
+  `$1` group expansion via `regexp.Expand`.
+- Keybindings: Ctrl+F/Cmd+F open find, Ctrl+H/Cmd+H open replace,
+  Enter/Shift+Enter navigate, Escape closes, Tab switches fields,
+  Alt+R toggles regex, Alt+C toggles case sensitivity,
+  Alt+S toggles find-in-selection, Ctrl+Enter replaces all.
+- Find-in-selection: `InSelection` flag + `SelectionScope` range on
+  searchState. Auto-enabled when opening find bar with a multi-line
+  selection. `filterToScope` post-filters match results. `[Sel]`
+  indicator in find bar toggles.
 
 ### Phase 7 — Quality of life  ☐
 
@@ -335,6 +371,9 @@ Architectural notes:
 - [ ] Theme: derive from go-gui theme; override per-token colors.
       (Currently hardcoded to "monokai". Needs theme bridge.)
 - [ ] Accessibility: a11y tree integration via go-gui NativePlatform.
+- [ ] Help screen: keybinding to replace buffer with read-only shortcut
+      reference. Gathers bindings from DefaultKeymap + user keymaps.
+      Dismiss restores original buffer. Invoke via F1 or Ctrl+?.
 
 ### Future (post-1.0)
 

@@ -20,6 +20,7 @@ type editorState struct {
 	Cursors  []CursorState // sorted by position; index 0 = primary
 	ScrollY  float32       // scroll offset in pixels
 	Measurer *text.Measurer
+	Search   searchState
 
 	// Mouse click tracking for double/triple-click detection.
 	LastClickTime int64           // UnixMilli of last mouse-down

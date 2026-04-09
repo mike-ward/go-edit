@@ -279,6 +279,21 @@ var defaultActions = map[string]Action{
 		},
 	},
 
+	// ---- find ----
+
+	"find.open": {
+		ID: "find.open",
+		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
+			openFindBar(st, buf, false)
+		},
+	},
+	"find.openReplace": {
+		ID: "find.openReplace",
+		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
+			openFindBar(st, buf, true)
+		},
+	},
+
 	// ---- indent ----
 
 	"edit.indent": {

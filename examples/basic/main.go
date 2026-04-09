@@ -51,11 +51,12 @@ func main() {
 	buf.EnableUndo(nil)
 
 	view := func(w *gui.Window) gui.View {
+		ww, wh := w.WindowSize()
 		return edit.Editor(edit.EditorCfg{
 			IDFocus:         focusEditor,
 			Buffer:          buf,
-			Width:           winWidth,
-			Height:          winHeight,
+			Width:           float32(ww),
+			Height:          float32(wh),
 			ShowLineNumbers: true,
 		})
 	}

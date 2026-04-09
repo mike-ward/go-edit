@@ -12,6 +12,18 @@ import (
 // selectionBgColor is the background fill for selected text.
 var selectionBgColor = gui.RGBA(51, 144, 255, 96)
 
+// matchBgColor highlights all search matches.
+var matchBgColor = gui.RGBA(255, 200, 0, 60)
+
+// currentMatchBgColor highlights the current/active search match.
+var currentMatchBgColor = gui.RGBA(255, 150, 0, 120)
+
+// findBarBgColor is the find bar background.
+var findBarBgColor = gui.RGBA(40, 40, 40, 230)
+
+// findBarBorderColor is the find bar border.
+var findBarBorderColor = gui.RGBA(80, 80, 80, 255)
+
 // editorOnDraw returns a DrawCanvas OnDraw closure. The closure reads
 // per-frame data from frame (populated by AmendLayout) and renders
 // only the visible line range to dc.
@@ -85,6 +97,25 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 
 			lineBytes := buf.Line(i)
 
+			// Draw search match highlights (below selection).
+			if st.Search.Active && len(st.Search.Matches) > 0 {
+				for _, mr := range matchesForLine(st.Search.Matches, i) {
+					drawSelectionBg(dc, mr, i,
+						lineBytes, textX, y, lh,
+						st.Measurer, matchBgColor)
+				}
+				// Current match in brighter color.
+				idx := st.Search.CurrentMatch
+				if idx >= 0 && idx < len(st.Search.Matches) {
+					cm := st.Search.Matches[idx]
+					if cm.Start.Line <= i && cm.End.Line >= i {
+						drawSelectionBg(dc, cm, i,
+							lineBytes, textX, y, lh,
+							st.Measurer, currentMatchBgColor)
+					}
+				}
+			}
+
 			// Draw selection backgrounds for all cursors.
 			for ci := range sels {
 				if sels[ci].hasSel {
@@ -122,6 +153,11 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 		if cfg.ShowLineNumbers {
 			dc.Line(frame.gutterW, 0, frame.gutterW, dc.Height,
 				theme.ColorBorder, 1)
+		}
+
+		// Find bar overlay.
+		if st.Search.Active {
+			drawFindBar(dc, cfg, &st, st.Measurer, lh, monoStyle)
 		}
 	}
 }
@@ -277,4 +313,184 @@ func drawSelectionBg(
 	if ex > sx {
 		dc.FilledRect(sx, y, ex-sx, lh, color)
 	}
+}
+
+// drawFindBar renders the find/replace bar at the top-right of the
+// viewport.
+func drawFindBar(
+	dc *gui.DrawContext,
+	cfg EditorCfg,
+	st *editorState,
+	m *text.Measurer,
+	lh float32,
+	baseStyle gui.TextStyle,
+) {
+	if m == nil {
+		return
+	}
+	adv := m.Advance()
+	if adv <= 0 || lh <= 0 {
+		return
+	}
+	ss := &st.Search
+	rowH := lh * 1.5
+	pad := adv / 2
+
+	// Bar dimensions.
+	rows := 1
+	if ss.ShowReplace {
+		rows = 2
+	}
+	barH := rowH*float32(rows) + pad*2
+	barW := min(dc.Width*0.5, float32(400))
+	if barW < 200 {
+		barW = min(float32(200), dc.Width)
+	}
+	edgePad := adv * 4
+	barX := dc.Width - barW - edgePad
+	if barW+edgePad > dc.Width {
+		barW = dc.Width - edgePad
+		if barW < edgePad {
+			barW = dc.Width
+			edgePad = 0
+		}
+		barX = dc.Width - barW - edgePad
+	}
+	if barX < 0 {
+		barX = 0
+	}
+	barY := pad
+
+	// Background + border.
+	dc.FilledRect(barX, barY, barW, barH, findBarBgColor)
+	dc.Rect(barX, barY, barW, barH, findBarBorderColor, 1)
+
+	// Styles.
+	dimStyle := baseStyle
+	dimStyle.Color = gui.RGBA(120, 120, 120, 255)
+
+	inputX := barX + pad
+	inputY := barY + pad
+	inputW := barW - pad*2
+
+	// Toggle indicators.
+	toggles := ""
+	if ss.IsRegex {
+		toggles += "[.*] "
+	} else {
+		toggles += " .*  "
+	}
+	if ss.CaseSensitive {
+		toggles += "[Aa] "
+	} else {
+		toggles += " Aa  "
+	}
+	if ss.InSelection {
+		toggles += "[Sel]"
+	} else {
+		toggles += " Sel "
+	}
+	toggleW := float32(len(toggles)) * adv
+	fieldW := inputW - toggleW - adv
+	if fieldW < adv {
+		fieldW = adv
+	}
+
+	// Draw query field.
+	drawSearchField(dc, ss.Query, ss.FieldCursor,
+		!ss.FocusReplace, inputX, inputY, fieldW, rowH,
+		baseStyle, m)
+
+	// Toggle text.
+	toggleX := inputX + fieldW + adv
+	toggleY := inputY + (rowH-lh)/2
+	dc.Text(toggleX, toggleY, toggles, dimStyle)
+
+	// Match count.
+	countStr := matchCountStr(ss)
+	countW := float32(len(countStr)) * adv
+	countX := inputX + fieldW - countW - pad
+	dc.Text(countX, toggleY, countStr, dimStyle)
+
+	// Replace row.
+	if ss.ShowReplace {
+		replY := inputY + rowH
+		drawSearchField(dc, ss.ReplaceText, ss.FieldCursor,
+			ss.FocusReplace, inputX, replY, fieldW, rowH,
+			baseStyle, m)
+	}
+}
+
+// drawSearchField renders one input field of the find bar.
+func drawSearchField(
+	dc *gui.DrawContext,
+	fieldText string,
+	cursorPos int,
+	focused bool,
+	x, y, w, h float32,
+	style gui.TextStyle,
+	m *text.Measurer,
+) {
+	if m == nil || w <= 0 || h <= 0 {
+		return
+	}
+	adv := m.Advance()
+	if adv <= 0 {
+		return
+	}
+	lh := m.LineHeight()
+	pad := adv / 2
+
+	// Field background.
+	fieldBg := gui.RGBA(30, 30, 30, 255)
+	if focused {
+		fieldBg = gui.RGBA(50, 50, 50, 255)
+	}
+	dc.FilledRect(x, y+2, w, h-4, fieldBg)
+
+	// Text.
+	textY := y + (h-lh)/2
+	textX := x + pad
+	if len(fieldText) > 0 {
+		maxChars := int((w - pad*2) / adv)
+		display := fieldText
+		if maxChars > 0 && len(display) > maxChars {
+			display = display[len(display)-maxChars:]
+		}
+		dc.Text(textX, textY, display, style)
+	}
+
+	// Cursor.
+	if focused {
+		displayText := fieldText
+		cursorByte := cursorPos
+		maxChars := int((w - pad*2) / adv)
+		if maxChars > 0 && len(displayText) > maxChars {
+			offset := len(displayText) - maxChars
+			displayText = displayText[offset:]
+			cursorByte -= offset
+			if cursorByte < 0 {
+				cursorByte = 0
+			}
+		}
+		cx := textX + m.XForColumn([]byte(displayText), cursorByte)
+		dc.FilledRect(cx, y+4, 1, h-8, style.Color)
+	}
+}
+
+// matchCountStr returns a display string like "3 of 42".
+func matchCountStr(ss *searchState) string {
+	if len(ss.Query) == 0 {
+		return ""
+	}
+	if len(ss.Matches) == 0 {
+		return "No results"
+	}
+	cur := max(ss.CurrentMatch+1, 1)
+	total := len(ss.Matches)
+	suffix := ""
+	if total >= maxMatches {
+		suffix = "+"
+	}
+	return strconv.Itoa(cur) + " of " + strconv.Itoa(total) + suffix
 }

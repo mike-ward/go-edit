@@ -53,6 +53,12 @@ var DefaultKeymap = &Keymap{
 		{Key: gui.KeyD, Modifiers: gui.ModSuper, ActionID: "cursor.addNext"},
 		{Key: gui.KeyEscape, ActionID: "cursor.escape"},
 
+		// ---- find / replace ----
+		{Key: gui.KeyF, Modifiers: gui.ModCtrl, ActionID: "find.open"},
+		{Key: gui.KeyF, Modifiers: gui.ModSuper, ActionID: "find.open"},
+		{Key: gui.KeyH, Modifiers: gui.ModCtrl, ActionID: "find.openReplace"},
+		{Key: gui.KeyH, Modifiers: gui.ModSuper, ActionID: "find.openReplace"},
+
 		// ---- undo / redo ----
 		{Key: gui.KeyZ, Modifiers: gui.ModCtrl, ActionID: "edit.undo"},
 		{Key: gui.KeyZ, Modifiers: gui.ModSuper, ActionID: "edit.undo"},

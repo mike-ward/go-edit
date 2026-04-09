@@ -27,6 +27,7 @@ func isEditAction(id string) bool {
 // so OnDraw can read them.
 func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.Window) {
 	invalidateSent := false
+	var searchEditRemove func()
 
 	return func(layout *gui.Layout, w *gui.Window) {
 		st := loadState(w, cfg.IDFocus)
@@ -66,6 +67,26 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		clampCursors(&st, cfg.Buffer)
 		clampScroll(&st, cfg, lh)
 
+		// Recompute search matches when query/flags changed or
+		// buffer was edited.
+		if st.Search.Active && len(st.Search.Query) > 0 &&
+			needsRecompute(&st.Search) {
+			recomputeMatches(&st, cfg.Buffer)
+		}
+		// Register/remove buffer edit observer for match
+		// invalidation.
+		if st.Search.Active && searchEditRemove == nil {
+			searchEditRemove = cfg.Buffer.OnEdit(func(_ buffer.Change) {
+				// Mark dirty; recompute on next AmendLayout.
+				st := loadState(w, cfg.IDFocus)
+				st.Search.matchesDirty = true
+				storeState(w, cfg.IDFocus, st)
+			})
+		} else if !st.Search.Active && searchEditRemove != nil {
+			searchEditRemove()
+			searchEditRemove = nil
+		}
+
 		frame.state = st
 		frame.lineHeight = lh
 		frame.gutterW = gutterW
@@ -99,6 +120,19 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 	maps.Copy(actions, cfg.Actions)
 
 	return func(layout *gui.Layout, e *gui.Event, w *gui.Window) {
+		// When find bar is active, route keys there first.
+		{
+			st := loadState(w, cfg.IDFocus)
+			if st.Search.Active {
+				if handleSearchKey(cfg, &st, cfg.Buffer, e) {
+					ensureCursorVisible(&st, frame, cfg.Height)
+					storeState(w, cfg.IDFocus, st)
+					e.IsHandled = true
+					return
+				}
+			}
+		}
+
 		actionID, ok := stack.Resolve(e.KeyCode, e.Modifiers)
 		if !ok {
 			return
@@ -139,11 +173,23 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 
 func editorOnChar(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.Event, *gui.Window) {
 	return func(layout *gui.Layout, e *gui.Event, w *gui.Window) {
-		if cfg.ReadOnly {
-			return
-		}
 		r := rune(e.CharCode)
 		if !acceptChar(r) {
+			return
+		}
+
+		// When find bar is active, route chars there.
+		{
+			st := loadState(w, cfg.IDFocus)
+			if st.Search.Active {
+				handleSearchChar(&st, cfg.Buffer, r)
+				storeState(w, cfg.IDFocus, st)
+				e.IsHandled = true
+				return
+			}
+		}
+
+		if cfg.ReadOnly {
 			return
 		}
 		var buf2 [4]byte
