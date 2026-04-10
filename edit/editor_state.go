@@ -82,6 +82,11 @@ type editorFrameData struct {
 	visRowsCacheFolds int
 	visRowsDirty      bool
 
+	// Canvas origin in window coordinates, captured on click
+	// for translating MouseLock drag coords to canvas-local.
+	canvasOriginX float32
+	canvasOriginY float32
+
 	// Sticky scroll (transient per-frame).
 	stickyLines []int
 

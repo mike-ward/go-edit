@@ -152,7 +152,7 @@ func TestHitTestPosition_NaNCoords(t *testing.T) {
 	d.tick()
 	nan := float32(math.NaN())
 	e := &gui.Event{MouseX: nan, MouseY: nan}
-	pos := hitTestPosition(e, d.frame, buf)
+	pos := hitTestPosition(e, d.frame, buf, -1)
 	if pos.Line != 0 || pos.ByteCol != 0 {
 		t.Errorf("NaN coords → %+v, want {0 0}", pos)
 	}
@@ -165,7 +165,7 @@ func TestHitTestPosition_NegativeCoords(t *testing.T) {
 	})
 	d.tick()
 	e := &gui.Event{MouseX: -100, MouseY: -100}
-	pos := hitTestPosition(e, d.frame, buf)
+	pos := hitTestPosition(e, d.frame, buf, -1)
 	if pos.Line != 0 || pos.ByteCol != 0 {
 		t.Errorf("negative coords → %+v, want {0 0}", pos)
 	}
@@ -178,7 +178,7 @@ func TestHitTestPosition_NilMeasurer(t *testing.T) {
 		state:      editorState{Measurer: nil},
 	}
 	e := &gui.Event{MouseX: 10, MouseY: 10}
-	pos := hitTestPosition(e, frame, buf)
+	pos := hitTestPosition(e, frame, buf, -1)
 	if pos.Line != 0 || pos.ByteCol != 0 {
 		t.Errorf("nil measurer → %+v, want {0 0}", pos)
 	}
@@ -349,5 +349,186 @@ func TestMultiCursor_MaxCursorsCap(t *testing.T) {
 	})
 	if len(st.Cursors) != maxCursors {
 		t.Errorf("len=%d want %d", len(st.Cursors), maxCursors)
+	}
+}
+
+// ---------- CursorPos public API ----------
+
+func TestCursorPos_NilWindow(t *testing.T) {
+	line, col, ok := CursorPos(nil, 1)
+	if ok || line != 0 || col != 0 {
+		t.Errorf("nil window → (%d,%d,%v), want (0,0,false)",
+			line, col, ok)
+	}
+}
+
+func TestCursorPos_NoState(t *testing.T) {
+	w := fakewin.New()
+	line, col, ok := CursorPos(w, 999)
+	if ok {
+		t.Errorf("no state → ok=true, want false")
+	}
+	if line != 0 || col != 0 {
+		t.Errorf("no state → (%d,%d), want (0,0)", line, col)
+	}
+}
+
+func TestCursorPos_EmptyCursors(t *testing.T) {
+	w := fakewin.New()
+	// Seed state with empty Cursors slice.
+	st := editorState{Cursors: []CursorState{}}
+	storeState(w, 50, st)
+	_, _, ok := CursorPos(w, 50)
+	if ok {
+		t.Error("empty cursors → ok=true, want false")
+	}
+}
+
+func TestCursorPos_ReturnsPosition(t *testing.T) {
+	buf := mkBuf("aaa\nbbb\nccc")
+	d := newDriver(EditorCfg{
+		IDFocus: 51, Buffer: buf, Width: 400, Height: 200,
+	})
+	// Move cursor to line 1, col 2.
+	d.sendClick(
+		d.frame.gutterW+d.frame.padLeft+16, // 2 chars × 8px
+		16,                                 // line 1 × 16px
+		0,
+	)
+	line, col, ok := CursorPos(d.w, 51)
+	if !ok {
+		t.Fatal("ok=false, want true")
+	}
+	if line != 1 {
+		t.Errorf("line=%d, want 1", line)
+	}
+	if col != 2 {
+		t.Errorf("col=%d, want 2", col)
+	}
+}
+
+// ---------- hitTestPosition additional coverage ----------
+
+func TestHitTestPosition_EmptyBuffer(t *testing.T) {
+	buf := buffer.New() // 0 lines
+	d := newDriver(EditorCfg{
+		IDFocus: 52, Buffer: buf, Width: 400, Height: 200,
+	})
+	d.tick()
+	e := &gui.Event{MouseX: 50, MouseY: 50}
+	pos := hitTestPosition(e, d.frame, buf, -1)
+	if pos.Line != 0 || pos.ByteCol != 0 {
+		t.Errorf("empty buffer → %+v, want {0 0}", pos)
+	}
+}
+
+func TestHitTestPosition_ScrollYOverride(t *testing.T) {
+	buf := buffer.FromBytes([]byte("aaa\nbbb\nccc\nddd\neee"))
+	d := newDriver(EditorCfg{
+		IDFocus: 53, Buffer: buf, Width: 400, Height: 200,
+	})
+	d.tick()
+	// Click at y=0 with scrollY=0 → line 0.
+	e := &gui.Event{MouseX: 0, MouseY: 0}
+	pos0 := hitTestPosition(e, d.frame, buf, 0)
+	// Click at y=0 with scrollY=32 (2 lines × 16px) → line 2.
+	pos32 := hitTestPosition(e, d.frame, buf, 32)
+	if pos0.Line != 0 {
+		t.Errorf("scrollY=0 → line %d, want 0", pos0.Line)
+	}
+	if pos32.Line != 2 {
+		t.Errorf("scrollY=32 → line %d, want 2", pos32.Line)
+	}
+}
+
+func TestHitTestPosition_NegativeMouseY(t *testing.T) {
+	buf := buffer.FromBytes([]byte("aaa\nbbb\nccc"))
+	d := newDriver(EditorCfg{
+		IDFocus: 54, Buffer: buf, Width: 400, Height: 200,
+	})
+	d.tick()
+	e := &gui.Event{MouseX: 0, MouseY: -100}
+	pos := hitTestPosition(e, d.frame, buf, -1)
+	if pos.Line != 0 {
+		t.Errorf("negative mouseY → line %d, want 0", pos.Line)
+	}
+}
+
+func TestHitTestPosition_NaNScrollYParam(t *testing.T) {
+	buf := buffer.FromBytes([]byte("hello"))
+	d := newDriver(EditorCfg{
+		IDFocus: 55, Buffer: buf, Width: 400, Height: 200,
+	})
+	d.tick()
+	nan := float32(math.NaN())
+	e := &gui.Event{MouseX: 0, MouseY: 0}
+	pos := hitTestPosition(e, d.frame, buf, nan)
+	// NaN scrollY should fall back to frame snapshot (0).
+	if pos.Line != 0 || pos.ByteCol != 0 {
+		t.Errorf("NaN scrollY → %+v, want {0 0}", pos)
+	}
+}
+
+// ---------- hitTestLocal ----------
+
+func TestHitTestLocal_NilBuffer(t *testing.T) {
+	frame := &editorFrameData{lineHeight: 16}
+	var scratch gui.Event
+	pos := hitTestLocal(10, 10, -1, frame, nil, &scratch)
+	if pos.Line != 0 || pos.ByteCol != 0 {
+		t.Errorf("nil buf → %+v, want {0 0}", pos)
+	}
+}
+
+func TestHitTestLocal_NilScratch(t *testing.T) {
+	buf := buffer.FromBytes([]byte("hello"))
+	frame := &editorFrameData{lineHeight: 16}
+	pos := hitTestLocal(10, 10, -1, frame, buf, nil)
+	if pos.Line != 0 || pos.ByteCol != 0 {
+		t.Errorf("nil scratch → %+v, want {0 0}", pos)
+	}
+}
+
+func TestHitTestLocal_DelegatesToHitTest(t *testing.T) {
+	buf := buffer.FromBytes([]byte("aaa\nbbb\nccc"))
+	d := newDriver(EditorCfg{
+		IDFocus: 56, Buffer: buf, Width: 400, Height: 200,
+	})
+	d.tick()
+	var scratch gui.Event
+	// y=32 at 16px line height → line 2.
+	pos := hitTestLocal(0, 32, -1, d.frame, buf, &scratch)
+	if pos.Line != 2 {
+		t.Errorf("line=%d, want 2", pos.Line)
+	}
+}
+
+// ---------- canvasOrigin NaN guard ----------
+
+func TestOnClick_CanvasOriginNaNGuard(t *testing.T) {
+	buf := buffer.FromBytes([]byte("hello"))
+	d := newDriver(EditorCfg{
+		IDFocus: 57, Buffer: buf, Width: 400, Height: 200,
+	})
+	d.tick()
+
+	// Set valid origins first.
+	d.frame.canvasOriginX = 10
+	d.frame.canvasOriginY = 20
+
+	// Simulate click with NaN shape coordinates.
+	nan := float32(math.NaN())
+	ly := &gui.Layout{Shape: &gui.Shape{X: nan, Y: nan}}
+	e := fakewin.NewClickEvent(0, 0, 0)
+	d.click(ly, e, d.w)
+
+	// Origins should retain prior valid values.
+	if d.frame.canvasOriginX != 10 {
+		t.Errorf("canvasOriginX=%v, want 10",
+			d.frame.canvasOriginX)
+	}
+	if d.frame.canvasOriginY != 20 {
+		t.Errorf("canvasOriginY=%v, want 20",
+			d.frame.canvasOriginY)
 	}
 }

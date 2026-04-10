@@ -7,23 +7,31 @@ import (
 	"github.com/mike-ward/go-gui/gui"
 )
 
-const doubleClickThresholdMs = 400
+const (
+	doubleClickThresholdMs = 400
+	animIDEditorDragScroll = "edit-drag-scroll"
+	dragScrollIntervalMs   = 32
+	dragScrollSpeedFactor  = 0.3
+)
 
 // hitTestPosition converts mouse event coordinates to a buffer
-// Position, clamped to valid line/col.
+// Position, clamped to valid line/col. scrollY overrides the
+// frame snapshot when >= 0; pass -1 to use frame.state.ScrollY.
 func hitTestPosition(
 	e *gui.Event,
 	frame *editorFrameData,
 	buf *buffer.Buffer,
+	scrollY float32,
 ) buffer.Position {
 	mx := e.MouseX - frame.gutterW - frame.padLeft
 	my := e.MouseY
 
-	// Guard NaN / negative / absurd values.
+	// Guard NaN / absurd values. Negative my is valid during
+	// drag-above-viewport (triggers upward autoscroll).
 	if mx != mx || mx < 0 {
 		mx = 0
 	}
-	if my != my || my < 0 {
+	if my != my {
 		my = 0
 	}
 
@@ -32,7 +40,10 @@ func hitTestPosition(
 		return buffer.Position{}
 	}
 
-	visRow := max(int((my+frame.state.ScrollY)/lh), 0)
+	if scrollY < 0 || scrollY != scrollY { // NaN guard
+		scrollY = frame.state.ScrollY
+	}
+	visRow := max(int((my+scrollY)/lh), 0)
 	folds := frame.state.FoldedRanges
 	m := frame.state.Measurer
 
@@ -45,7 +56,11 @@ func hitTestPosition(
 	} else {
 		line = visRow
 	}
-	line = min(line, buf.LineCount()-1)
+	lc := buf.LineCount()
+	if lc == 0 {
+		return buffer.Position{}
+	}
+	line = min(line, lc-1)
 
 	lineBytes := buf.Line(line)
 
@@ -67,6 +82,24 @@ func hitTestPosition(
 	return buffer.Position{Line: line, ByteCol: col}
 }
 
+// hitTestLocal converts canvas-local coordinates to a buffer
+// Position. Reuses a shared Event to avoid heap allocation.
+// Pass scrollY >= 0 to override the frame snapshot, or -1 to
+// use frame.state.ScrollY.
+func hitTestLocal(
+	mx, my, scrollY float32,
+	frame *editorFrameData,
+	buf *buffer.Buffer,
+	scratch *gui.Event,
+) buffer.Position {
+	if buf == nil || scratch == nil {
+		return buffer.Position{}
+	}
+	scratch.MouseX = mx
+	scratch.MouseY = my
+	return hitTestPosition(scratch, frame, buf, scrollY)
+}
+
 // editorOnClick returns the OnClick handler for the DrawCanvas.
 // OnClick fires on mouse-down in go-gui.
 func editorOnClick(
@@ -78,6 +111,18 @@ func editorOnClick(
 			return
 		}
 		st := loadState(w, cfg.IDFocus)
+
+		// Capture canvas origin for MouseLock drag coord
+		// translation. Guard NaN from layout.
+		if layout.Shape != nil {
+			ox, oy := layout.Shape.X, layout.Shape.Y
+			if ox == ox { // not NaN
+				frame.canvasOriginX = ox
+			}
+			if oy == oy {
+				frame.canvasOriginY = oy
+			}
+		}
 
 		// Gutter click: toggle fold.
 		if cfg.EnableFolding && cfg.ShowLineNumbers &&
@@ -116,7 +161,7 @@ func editorOnClick(
 			}
 		}
 
-		pos := hitTestPosition(e, frame, cfg.Buffer)
+		pos := hitTestPosition(e, frame, cfg.Buffer, -1)
 		now := time.Now().UnixMilli()
 
 		// Click count detection. Use line-only match so minor
@@ -177,39 +222,92 @@ func editorOnClick(
 		ensureCursorVisible(&st, frame, cfg)
 		storeState(w, cfg.IDFocus, st)
 
-		// Start drag via MouseLock for single clicks (not alt-click).
+		// Start drag via MouseLock for single clicks
+		// (not alt-click).
 		if st.ClickCount == 1 && !e.Modifiers.Has(gui.ModAlt) {
-			w.MouseLock(gui.MouseLockCfg{
-				MouseMove: editorDragMove(cfg, frame),
-				MouseUp:   editorDragUp(),
-			})
+			startDrag(cfg, frame, w)
 		}
 
 		e.IsHandled = true
 	}
 }
 
-// editorDragMove updates the cursor during a mouse drag.
-func editorDragMove(
-	cfg EditorCfg,
-	frame *editorFrameData,
-) func(*gui.Layout, *gui.Event, *gui.Window) {
-	return func(layout *gui.Layout, e *gui.Event, w *gui.Window) {
-		if !frame.valid {
-			return
-		}
+// startDrag initiates mouse-drag selection with autoscroll.
+// Follows the go-gui text widget pattern: a repeating animation
+// scrolls and extends the selection while the mouse is outside
+// the viewport.
+func startDrag(cfg EditorCfg, frame *editorFrameData, w *gui.Window) {
+	var lastLocalX, lastLocalY float32
+	var scratch gui.Event // reused to avoid per-tick alloc
+
+	// dragUpdate does a single load → hit-test → clamp →
+	// store cycle. scrollY < 0 means use the stored value.
+	dragUpdate := func(lx, ly, scrollY float32, w *gui.Window) {
 		st := loadState(w, cfg.IDFocus)
+		if scrollY >= 0 {
+			st.ScrollY = scrollY
+		}
 		p := st.primary()
-		p.Cursor = hitTestPosition(e, frame, cfg.Buffer)
+		p.Cursor = hitTestLocal(lx, ly, st.ScrollY,
+			frame, cfg.Buffer, &scratch)
 		p.DesiredCol = p.Cursor.ByteCol
+		clampScroll(&st, cfg, frame, frame.lineHeight)
 		ensureCursorVisible(&st, frame, cfg)
 		storeState(w, cfg.IDFocus, st)
 	}
-}
 
-// editorDragUp ends the mouse drag.
-func editorDragUp() func(*gui.Layout, *gui.Event, *gui.Window) {
-	return func(_ *gui.Layout, _ *gui.Event, w *gui.Window) {
-		w.MouseUnlock()
+	dragScrollCB := func(_ *gui.Animate, w *gui.Window) {
+		lh := frame.lineHeight
+		if lh <= 0 {
+			return
+		}
+		var delta float32
+		if lastLocalY < 0 {
+			delta = lastLocalY * dragScrollSpeedFactor
+		} else if lastLocalY > cfg.Height {
+			delta = (lastLocalY - cfg.Height) * dragScrollSpeedFactor
+		} else {
+			w.AnimationRemove(animIDEditorDragScroll)
+			return
+		}
+		st := loadState(w, cfg.IDFocus)
+		newScroll := st.ScrollY + delta
+		dragUpdate(lastLocalX, lastLocalY, newScroll, w)
 	}
+
+	w.MouseLock(gui.MouseLockCfg{
+		MouseMove: func(_ *gui.Layout, e *gui.Event, w *gui.Window) {
+			if !frame.valid {
+				return
+			}
+			lx := e.MouseX - frame.canvasOriginX
+			ly := e.MouseY - frame.canvasOriginY
+			if lx != lx || ly != ly { // NaN guard
+				return
+			}
+			lastLocalX = lx
+			lastLocalY = ly
+			dragUpdate(lastLocalX, lastLocalY, -1, w)
+
+			outside := lastLocalY < 0 ||
+				lastLocalY > cfg.Height
+			if outside && !w.HasAnimation(
+				animIDEditorDragScroll) {
+				w.AnimationAdd(&gui.Animate{
+					AnimID: animIDEditorDragScroll,
+					Delay: dragScrollIntervalMs *
+						time.Millisecond,
+					Repeat:   true,
+					Refresh:  gui.AnimationRefreshLayout,
+					Callback: dragScrollCB,
+				})
+			} else if !outside {
+				w.AnimationRemove(animIDEditorDragScroll)
+			}
+		},
+		MouseUp: func(_ *gui.Layout, _ *gui.Event, w *gui.Window) {
+			w.AnimationRemove(animIDEditorDragScroll)
+			w.MouseUnlock()
+		},
+	})
 }

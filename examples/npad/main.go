@@ -24,7 +24,7 @@ const (
 	winWidth           = 1000
 	winHeight          = 700
 	focusEditor uint32 = 1
-	statusBarH         = 24
+	statusBarH         = 32
 	maxRecent          = 10
 )
 
@@ -59,32 +59,32 @@ var chromaStyleNames []string
 
 // langConfigs provides per-extension editor settings.
 var langConfigs = map[string]edit.LangConfig{
-	".go":       {TabWidth: 4, UseTabs: true, CommentLine: "//"},
-	".py":       {TabWidth: 4, CommentLine: "#"},
-	".js":       {TabWidth: 2, CommentLine: "//"},
-	".jsx":      {TabWidth: 2, CommentLine: "//"},
-	".ts":       {TabWidth: 2, CommentLine: "//"},
-	".tsx":      {TabWidth: 2, CommentLine: "//"},
-	".rs":       {TabWidth: 4, CommentLine: "//"},
-	".c":        {TabWidth: 4, CommentLine: "//", CommentBlockStart: "/*", CommentBlockEnd: "*/"},
-	".h":        {TabWidth: 4, CommentLine: "//", CommentBlockStart: "/*", CommentBlockEnd: "*/"},
-	".cpp":      {TabWidth: 4, CommentLine: "//", CommentBlockStart: "/*", CommentBlockEnd: "*/"},
-	".java":     {TabWidth: 4, CommentLine: "//", CommentBlockStart: "/*", CommentBlockEnd: "*/"},
-	".rb":       {TabWidth: 2, CommentLine: "#"},
-	".sh":       {TabWidth: 4, CommentLine: "#"},
-	".bash":     {TabWidth: 4, CommentLine: "#"},
-	".zsh":      {TabWidth: 4, CommentLine: "#"},
-	".lua":      {TabWidth: 4, CommentLine: "--"},
-	".sql":      {TabWidth: 4, CommentLine: "--"},
-	".html":     {TabWidth: 2, CommentBlockStart: "<!--", CommentBlockEnd: "-->"},
-	".css":      {TabWidth: 2, CommentBlockStart: "/*", CommentBlockEnd: "*/"},
-	".json":     {TabWidth: 2},
-	".yaml":     {TabWidth: 2, CommentLine: "#"},
-	".yml":      {TabWidth: 2, CommentLine: "#"},
-	".toml":     {TabWidth: 2, CommentLine: "#"},
-	".xml":      {TabWidth: 2, CommentBlockStart: "<!--", CommentBlockEnd: "-->"},
-	".md":       {TabWidth: 4},
-	"Makefile":  {TabWidth: 8, UseTabs: true, CommentLine: "#"},
+	".go":        {TabWidth: 4, UseTabs: true, CommentLine: "//"},
+	".py":        {TabWidth: 4, CommentLine: "#"},
+	".js":        {TabWidth: 2, CommentLine: "//"},
+	".jsx":       {TabWidth: 2, CommentLine: "//"},
+	".ts":        {TabWidth: 2, CommentLine: "//"},
+	".tsx":       {TabWidth: 2, CommentLine: "//"},
+	".rs":        {TabWidth: 4, CommentLine: "//"},
+	".c":         {TabWidth: 4, CommentLine: "//", CommentBlockStart: "/*", CommentBlockEnd: "*/"},
+	".h":         {TabWidth: 4, CommentLine: "//", CommentBlockStart: "/*", CommentBlockEnd: "*/"},
+	".cpp":       {TabWidth: 4, CommentLine: "//", CommentBlockStart: "/*", CommentBlockEnd: "*/"},
+	".java":      {TabWidth: 4, CommentLine: "//", CommentBlockStart: "/*", CommentBlockEnd: "*/"},
+	".rb":        {TabWidth: 2, CommentLine: "#"},
+	".sh":        {TabWidth: 4, CommentLine: "#"},
+	".bash":      {TabWidth: 4, CommentLine: "#"},
+	".zsh":       {TabWidth: 4, CommentLine: "#"},
+	".lua":       {TabWidth: 4, CommentLine: "--"},
+	".sql":       {TabWidth: 4, CommentLine: "--"},
+	".html":      {TabWidth: 2, CommentBlockStart: "<!--", CommentBlockEnd: "-->"},
+	".css":       {TabWidth: 2, CommentBlockStart: "/*", CommentBlockEnd: "*/"},
+	".json":      {TabWidth: 2},
+	".yaml":      {TabWidth: 2, CommentLine: "#"},
+	".yml":       {TabWidth: 2, CommentLine: "#"},
+	".toml":      {TabWidth: 2, CommentLine: "#"},
+	".xml":       {TabWidth: 2, CommentBlockStart: "<!--", CommentBlockEnd: "-->"},
+	".md":        {TabWidth: 4},
+	"Makefile":   {TabWidth: 8, UseTabs: true, CommentLine: "#"},
 	"Dockerfile": {TabWidth: 4, CommentLine: "#"},
 }
 
@@ -199,6 +199,8 @@ func mainView(w *gui.Window) gui.View {
 		Buffer:           s.Buf,
 		Width:            editorW,
 		Height:           editorH,
+		Padding:          gui.NoPadding,
+		SizeBorder:       gui.Some[float32](0),
 		ShowLineNumbers:  s.ShowLineNumbers,
 		ShowBracketMatch: s.ShowBracketMatch,
 		ShowWhitespace:   s.ShowWhitespace,
@@ -249,10 +251,11 @@ func statusBar(
 	ts.Color = gui.RGBA(180, 180, 180, 255)
 
 	return gui.Row(gui.ContainerCfg{
-		Height:  statusBarH,
-		Sizing:  gui.FillFixed,
-		Color:   gui.RGBA(30, 30, 30, 255),
-		Padding: gui.NoPadding,
+		Height:    statusBarH,
+		MinHeight: statusBarH,
+		Sizing:    gui.FillFixed,
+		Color:     gui.RGBA(30, 30, 30, 255),
+		Padding:   gui.NoPadding,
 		Content: []gui.View{
 			gui.Text(gui.TextCfg{Text: posText + dirty, TextStyle: ts}),
 			// spacer

@@ -20,6 +20,8 @@ type EditorCfg struct {
 	Buffer           *buffer.Buffer
 	Width            float32
 	Height           float32
+	Padding          gui.Opt[gui.Padding]
+	SizeBorder       gui.Opt[float32]
 	ShowLineNumbers  bool
 	ShowBracketMatch bool
 	ShowWhitespace   WhitespaceMode
@@ -95,6 +97,9 @@ func Editor(cfg EditorCfg) gui.View {
 		IDFocus:     cfg.IDFocus,
 		Width:       cfg.Width,
 		Height:      cfg.Height,
+		Sizing:      gui.FixedFixed,
+		Padding:     cfg.Padding,
+		SizeBorder:  cfg.SizeBorder,
 		Clip:        true,
 		A11YRole:    gui.AccessRoleTextArea,
 		A11YLabel:   a11yLabel,

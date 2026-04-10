@@ -6,6 +6,9 @@ import "github.com/mike-ward/go-gui/gui"
 // for the editor instance identified by focusID. Returns
 // (0, 0, false) if no state exists for that ID.
 func CursorPos(w *gui.Window, focusID uint32) (line, col int, ok bool) {
+	if w == nil {
+		return 0, 0, false
+	}
 	sm := gui.StateMapRead[uint32, editorState](w, nsEdit)
 	if sm == nil {
 		return 0, 0, false
