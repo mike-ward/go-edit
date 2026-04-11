@@ -524,27 +524,41 @@ func cmdClose(w *gui.Window) {
 	doNew(w)
 }
 
-// confirmSave prompts to save, then calls onDiscard if the user
-// chooses not to save (or after saving).
-func confirmSave(w *gui.Window, msg string, onDiscard func(*gui.Window)) {
+// confirmSave prompts Save/Don't Save/Cancel when there are unsaved changes.
+// onConfirm is called after a successful save or after discard.
+func confirmSave(w *gui.Window, msg string, onConfirm func(*gui.Window)) {
+	if onConfirm == nil {
+		return
+	}
 	s := gui.State[appState](w)
-	w.NativeConfirmDialog(gui.NativeConfirmDialogCfg{
+	w.NativeSaveDiscardDialog(gui.NativeSaveDiscardDialogCfg{
 		Title: "Unsaved Changes",
 		Body:  msg,
 		Level: gui.AlertWarning,
 		OnDone: func(result gui.NativeAlertResult, w *gui.Window) {
-			if result.Status == gui.DialogOK {
-				// Save first, then proceed.
+			switch result.Status {
+			case gui.DialogOK:
+				// Save then proceed.
 				if s.FilePath != "" {
 					doSave(w, s.FilePath)
+					onConfirm(w)
 				} else {
-					cmdSaveAs(w)
-					return // SaveAs callback handles flow
+					// Open SaveAs dialog; call onConfirm after save.
+					w.NativeSaveDialog(gui.NativeSaveDialogCfg{
+						Title:            "Save As",
+						ConfirmOverwrite: true,
+						OnDone: func(r gui.NativeDialogResult, w *gui.Window) {
+							if r.Status != gui.DialogOK || len(r.Paths) == 0 {
+								return
+							}
+							doSave(w, r.Paths[0].Path)
+							onConfirm(w)
+						},
+					})
 				}
-			}
-			// DialogCancel or after save: proceed.
-			if result.Status != gui.DialogCancel {
-				onDiscard(w)
+			case gui.DialogDiscard:
+				onConfirm(w)
+			// DialogCancel / DialogError: do nothing.
 			}
 		},
 	})
