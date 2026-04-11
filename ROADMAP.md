@@ -65,7 +65,7 @@ Key types (proposed):
 - No `io/fs` abstraction until a second consumer asks. `os` only.
 
 Still open at this layer:
-- [ ] Gutter+text one canvas or two sharing scroll Y.
+- [x] Gutter+text one canvas or two sharing scroll Y. One canvas.
 
 ### Phase 0 — Skeleton  ☑
 
@@ -400,6 +400,7 @@ Architectural notes:
 - [ ] Drag-and-drop file open. **Blocked**: go-gui has
       `EventFilesDropped` but no `OnFileDrop` handler in
       EventHandlers/DrawCanvasCfg/ContainerCfg. Needs upstream push.
+      Carried to Phase 9.
 - [x] Per-language config (tab width, comment string).
 - [x] Diagnostics gutter API (markers, squiggles) — no LSP yet, just an API
       surface for callers to push markers.
@@ -439,32 +440,116 @@ Architectural notes:
   Key interception in `editorOnKeyDown` (before find bar) and
   `editorOnChar`. Scrollable via Up/Down/PgUp/PgDn.
 
+### Phase 9 — Road to 1.0
+
+Small, unblocked items that close out the 1.0 story. Order is the
+recommended sequence.
+
+- [ ] Cursor blink animation. Injectable ticker on `editorState`
+      (reuse fake-clock pattern from undo coalesce). Resolves open
+      question on blink home.
+- [x] Large-file strategy: hard cap. `MaxLoadBytes=32 MiB` stays;
+      document the limit in package docs and surface a clear error
+      on overflow. go-edit positions as a code editor, not a log
+      viewer.
+- [ ] IME composition. No upstream push required — go-gui
+      already exposes `EventIMEComposition`, `Window.IMEComposing`/
+      `IMECompText`/`IMECompCursor`/`IMECompSelLen`, `IMESetRect`,
+      and delivers commits via `EventChar` with `e.IMEText`
+      populated. Work items:
+      (a) branch `editorOnChar` on `e.IMEText` before `CharCode`
+          so multi-codepoint commits insert as one unit;
+      (b) `AmendLayout` reads window IME state, stores preedit on
+          frame data, `editorOnDraw` renders preedit as inline
+          virtual text with underline at cursor;
+      (c) compute cursor screen rect in `AmendLayout` and call
+          `w.IMESetRect` so candidate window anchors correctly.
+      Optional upstream (not blocking): wire `OnIMECommit`
+      dispatch in go-gui `imeCompositionHandler` to replace window-
+      state polling with per-shape callbacks. Defer until second
+      consumer appears.
+- [ ] Soft-wrap cursor column math. Audit desired-column tracking
+      across wrapped rows — Up/Down across a wrapped line resets
+      to logical col. Resolves open question.
+- [ ] Drag-and-drop file open. **Blocked** on go-gui upstream
+      (`OnFileDrop` handler missing on EventHandlers/DrawCanvasCfg/
+      ContainerCfg). Carried from Phase 8.
+
+### Phase 10 — Substrate consumers
+
+Leverage Phase 1.5 decoration/filter/mark machinery. No new substrate.
+
+- [ ] Inline diff / blame gutter. `DecorationProvider` reading
+      `git diff` / `git blame` via `os/exec`; push `DecoGutter`
+      marks. Pure consumer.
+- [ ] Snippets + completion popup. Popup as virtual-text
+      `DecorationProvider`; snippet insertion via `BeginGroup` +
+      `MarkSet` tab stops (gravity already supported). Foundation
+      for later LSP/AI consumers.
+
+### Phase 11 — Separate packages
+
+Keep core lean. Ship as `edit/keymap/*`, `edit/spell/*`, etc.
+
+- [ ] Vim keymap as `edit/keymap/vim`. `KeymapStack` already
+      layers; may need `ModalState any` slot on editor state for
+      mode tracking.
+- [ ] Emacs keymap as `edit/keymap/emacs`.
+- [ ] Autocorrect / spell check. `EditFilter` + squiggle
+      decorations. Provider-agnostic with stub default.
+
 ### Future (post-1.0)
+
+Large subprojects. Don't start until Phases 9–11 land and substrate
+has absorbed real consumer pressure.
 
 - AI assist (ghost-text completion, inline chat, refactor) — consumer of
   Phase 1.5 substrate; provider-agnostic interface, no provider in core.
-- Autocorrect / spell check — `EditFilter` + decoration squiggles.
 - LSP client (separate subpackage; opt-in).
 - Tree-sitter via WASM (still no CGO) if chroma proves insufficient.
 - Collaborative editing (CRDT).
-- Inline diff / blame gutter.
-- Snippets, completion popup.
-- Vim / Emacs keymaps as separate packages.
+- Per-line gap buffer swap-in. Bench-gated; no action until
+  `BenchmarkRandomEdits10k` shows real pressure.
+- Minimap. Dropped from Phase 10; gated on user demand. Sticky
+  scroll + search highlight-all + folds cover the use cases.
+  Reconsider if multiple users ask.
 
 ## Open questions
 
+### Must answer before Phase 9
+
+- ~~Large-file strategy: memory-map? streaming load? hard cap?~~
+  Hard cap at `MaxLoadBytes=32 MiB`; documented.
+- ~~IME: does go-gui `NativePlatform` surface composition hooks today,
+  or is upstream push required first?~~ Hooks exist; no upstream
+  push required. See Phase 9 item for work breakdown.
+- One `Editor` per window, or N? Affects state-slot keying before
+  minimap (Phase 10) lands. Answer: N editors
+- ~~Public API: `edit` only, or split `edit/buffer` as independently
+  importable?~~ `edit` only. `edit/buffer` stays an implementation
+  package; no independent version contract.
+
+### Deferred
+
 - Per-line gap buffer: cap on line length before split/fallback for
-  pathological long lines (minified JS, logs)?
+  pathological long lines (minified JS, logs)? Answer: Yes
 - ~~Token cache granularity: per-line vs per-chunk.~~ Per-line (Phase 1.5).
-- Theme model: extend go-gui Theme or standalone EditorTheme?
-- Where does cursor blink animation live — go-gui animation subsystem or
-  internal ticker?
-- Soft-wrap impact on cursor column math — visual vs logical columns.
-- Large-file strategy: memory-map? streaming load? hard cap?
-- Undo coalescing rules: time window, char class, or both?
-- IME composition: route through go-gui NativePlatform IME hooks?
-- AI ghost text: document text or pure decoration? (cursor/selection math)
-- Autocorrect: synchronous `EditFilter` or async suggestion like AI?
+- Theme model: extend go-gui Theme or standalone EditorTheme? Answer: Standalone
+- ~~Where does cursor blink animation live.~~ Internal ticker with
+  injectable clock (Phase 9).
+- ~~Soft-wrap impact on cursor column math — visual vs logical columns.~~
+  Audit in Phase 9.
+- ~~Undo coalescing rules: time window, char class, or both?~~
+  Both. 500 ms window OR word-class transition (space/punct) flushes
+  the coalesce chain. Phase 3 implements time only; add char-class
+  break when AI/autocorrect work lands.
+- ~~AI ghost text: document text or pure decoration?~~ Pure
+  decoration (virtual text). Cursor/selection math ignores ghost;
+  accept promotes to real insert via `Buffer.Apply`.
+- ~~Autocorrect: synchronous `EditFilter` or async suggestion like AI?~~
+  Both. Cheap rules (common typos, whitespace fixes) run as synchronous
+  `EditFilter`; dictionary/grammar-scale corrections surface as async
+  squiggle + quick-fix, sharing the diagnostics code path.
 - ~~EditFilter ordering + conflict resolution when two filters touch same edit?~~
   Registration order; first rejection stops chain (Phase 1.5).
 - ~~Decoration providers: render thread or worker?~~ GUI goroutine via
@@ -480,10 +565,17 @@ Architectural notes:
   Autodetect via `detectIndent` (Phase 1.2).
 - ~~External change: prompt, auto-reload, or both (dirty vs clean split)?~~
   Poll-based watcher, callback on external change (Phase 1.2).
-- One `Editor` per window, or N? Affects state-slot keying.
-- Public API: `edit` only, or split `edit/buffer` as independently importable?
-- Gutter+text one canvas or two sharing scroll Y?
-- Minimap: same widget second viewport, or sibling reading shared buffer?
-- Fallback font chain for CJK / emoji — go-glyph default or custom?
-- Subpixel positioning needed, or integer advance fine for monospace?
-- Shaping cache lifetime: per-frame, per-line-edit, or LRU?
+- One `Editor` per window, or N? Affects state-slot keying. Answer: Allow N editors.
+- ~~Public API: `edit` only, or split `edit/buffer` as independently importable?~~
+  `edit` only.
+- ~~Gutter+text one canvas or two sharing scroll Y?~~ One canvas.
+  Matches current implementation; minimap drop removes the
+  second-canvas justification.
+- ~~Minimap: same widget second viewport, or sibling reading shared
+  buffer?~~ Dropped. Not planned for 1.0.
+- Fallback font chain for CJK / emoji — go-glyph default or custom? Answer: go-glyph default.
+- Subpixel positioning needed, or integer advance fine for monospace? Answer: Subpixel
+- ~~Shaping cache lifetime: per-frame, per-line-edit, or LRU?~~
+  Per-line-edit. Cache keyed by line; invalidated via existing
+  `PostEditFunc` observer on the touched line. Add a size cap as
+  belt-and-suspenders against pathological buffers.
