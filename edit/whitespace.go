@@ -62,6 +62,7 @@ func drawWhitespace(
 	style gui.TextStyle,
 	mode WhitespaceMode,
 	sels []selInfo,
+	clipLeft float32,
 ) {
 	if mode == WhitespaceNone || m == nil {
 		return
@@ -80,6 +81,9 @@ func drawWhitespace(
 			continue
 		}
 		x := textX + m.XForColumn(lineBytes, col)
+		if x < clipLeft {
+			continue
+		}
 		if ch == ' ' {
 			dc.Text(x, y, "·", wsStyle)
 		} else {
@@ -92,6 +96,9 @@ func drawWhitespace(
 		(mode == WhitespaceSelection &&
 			byteInSelection(lineIdx, len(lineBytes), sels)) {
 		x := textX + m.XForColumn(lineBytes, len(lineBytes))
+		if x < clipLeft {
+			return
+		}
 		dc.Text(x, y, "↵", wsStyle)
 	}
 }

@@ -84,9 +84,9 @@ type editorFrameData struct {
 	visRowsDirty      bool
 
 	// Max content width cache for horizontal scroll.
-	maxContentW         float32
+	maxContentW          float32
 	maxContentCacheLines int
-	maxContentDirty     bool
+	maxContentDirty      bool
 
 	// Canvas origin in window coordinates, captured on click
 	// for translating MouseLock drag coords to canvas-local.

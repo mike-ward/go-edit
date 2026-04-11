@@ -1,8 +1,10 @@
 package edit
 
 import (
+	"math"
 	"slices"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/mike-ward/go-edit/edit/buffer"
 	"github.com/mike-ward/go-edit/edit/text"
@@ -87,6 +89,11 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 		i := startLine
 		curSubRow := startSubRow
 
+		// Collect gutter entries (line, y) during the main pass so
+		// the gutter overlay can redraw them without re-computing wraps.
+		var gutterBuf [64]gutterEntry
+		gutterEntries := gutterBuf[:0]
+
 		for visRow <= lastVis && i < total {
 			lineBytes := buf.Line(i)
 
@@ -103,16 +110,14 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 			for sr := curSubRow; sr < numSubRows &&
 				visRow <= lastVis; sr++ {
 				y := float32(visRow)*lh - st.ScrollY
-				subStart, subEnd := subRowByteRange(
-					breaks, sr, len(lineBytes))
 
 				if cfg.ShowLineNumbers && sr == 0 {
-					drawGutter(dc, cfg, frame, folds,
-						i, y, gutterStyle, foldStyle)
-					drawGutterMarkers(dc, decos, i,
-						frame.gutterW, frame.padLeft,
-						y, lh, st.Measurer)
+					gutterEntries = append(gutterEntries,
+						gutterEntry{line: i, y: y})
 				}
+
+				subStart, subEnd := subRowByteRange(
+					breaks, sr, len(lineBytes))
 
 				drawSearchHighlights(dc, &st, &rt, i,
 					lineBytes, subStart, subEnd,
@@ -125,7 +130,8 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 					textX, y, lh, st.Measurer, rt.bracketMatchBg)
 				drawLineText(dc, lineBytes, breaks,
 					subStart, subEnd, i, textX, y,
-					decos, monoStyle, st.Measurer)
+					decos, monoStyle, st.Measurer,
+					frame.gutterW)
 				drawSquiggles(dc, decos, i, lineBytes,
 					subStart, subEnd, textX, y, lh,
 					st.Measurer)
@@ -141,7 +147,8 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 				if wsMode != WhitespaceNone {
 					drawWhitespace(dc, lineBytes, i,
 						textX, y, lh, st.Measurer,
-						monoStyle, wsMode, sels)
+						monoStyle, wsMode, sels,
+						frame.gutterW)
 				}
 
 				visRow++
@@ -158,10 +165,13 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 			hasFolds, wrapOn, textX, firstVis, lastVis,
 			lh, monoStyle, &rt)
 
-		// Gutter separator.
-		if cfg.ShowLineNumbers {
-			dc.Line(frame.gutterW, 0, frame.gutterW, dc.Height,
-				guiTheme.ColorBorder, 1)
+		// Gutter overlay: cover any bleeding rects with a background
+		// fill, then redraw line numbers on top using entries collected
+		// during the main pass (avoids re-running computeBreaks).
+		if cfg.ShowLineNumbers && frame.gutterW > 0 {
+			drawGutterPass(dc, cfg, frame, folds, decos,
+				gutterEntries, gutterStyle, foldStyle,
+				rt, guiTheme)
 		}
 
 		// Sticky scroll overlay.
@@ -287,6 +297,46 @@ func subRowByteRange(breaks []int, sr, lineLen int) (int, int) {
 	return start, end
 }
 
+// gutterEntry records the logical line and y-position for one gutter
+// row, collected during the main draw loop to avoid recomputing wraps.
+type gutterEntry struct {
+	line int
+	y    float32
+}
+
+// drawGutterPass paints the gutter background over any bleeding rects,
+// redraws line numbers from pre-collected entries, then draws the
+// gutter separator.
+func drawGutterPass(
+	dc *gui.DrawContext,
+	cfg EditorCfg,
+	frame *editorFrameData,
+	folds []FoldRange,
+	decos []buffer.Decoration,
+	entries []gutterEntry,
+	gutterStyle, foldStyle gui.TextStyle,
+	rt resolvedTheme,
+	theme gui.Theme,
+) {
+	gutterBg := rt.background
+	if !gutterBg.IsSet() {
+		gutterBg = theme.ColorBackground
+	}
+	dc.FilledRect(0, 0, frame.gutterW, dc.Height, gutterBg)
+
+	lh := frame.lineHeight
+	for _, ge := range entries {
+		drawGutter(dc, cfg, frame, folds,
+			ge.line, ge.y, gutterStyle, foldStyle)
+		drawGutterMarkers(dc, decos, ge.line,
+			frame.gutterW, frame.padLeft,
+			ge.y, lh, frame.state.Measurer)
+	}
+
+	dc.Line(frame.gutterW, 0, frame.gutterW, dc.Height,
+		theme.ColorBorder, 1)
+}
+
 // drawGutter draws the line number or fold indicator for one line.
 func drawGutter(
 	dc *gui.DrawContext,
@@ -408,7 +458,8 @@ func drawBracketHighlights(
 }
 
 // drawLineText renders line text, either as a full line (no wrap)
-// or a wrapped sub-row.
+// or a wrapped sub-row. clipLeft clips text that would draw left of
+// that x (used to prevent text from rendering over the gutter).
 func drawLineText(
 	dc *gui.DrawContext,
 	lineBytes []byte,
@@ -418,6 +469,7 @@ func drawLineText(
 	decos []buffer.Decoration,
 	base gui.TextStyle,
 	m *text.Measurer,
+	clipLeft float32,
 ) {
 	if m == nil {
 		return
@@ -426,21 +478,22 @@ func drawLineText(
 		lineDecos := decosForLine(decos, line)
 		if len(lineDecos) == 0 {
 			if len(lineBytes) > 0 {
-				dc.Text(textX, y,
+				textLeftClip(dc, textX, y,
 					text.ExpandTabs(lineBytes, m.TabWidth),
-					base)
+					base, clipLeft, m.Advance())
 			}
 		} else {
 			renderStyledLine(dc, textX, y, lineBytes,
-				lineDecos, base, m)
+				lineDecos, base, m, clipLeft)
 		}
 		return
 	}
 	subBytes := lineBytes[subStart:subEnd]
 	if len(subBytes) > 0 {
 		vcol := text.VisualCols(lineBytes, subStart, m.TabWidth)
-		dc.Text(textX, y,
-			text.ExpandTabsSpan(subBytes, vcol, m.TabWidth), base)
+		textLeftClip(dc, textX, y,
+			text.ExpandTabsSpan(subBytes, vcol, m.TabWidth),
+			base, clipLeft, m.Advance())
 	}
 }
 
@@ -545,13 +598,13 @@ func drawStickyScroll(
 		lineDecos := decosForLine(decos, line)
 		if len(lineDecos) == 0 {
 			if len(lineBytes) > 0 {
-				dc.Text(textX, y,
+				textLeftClip(dc, textX, y,
 					text.ExpandTabs(lineBytes, m.TabWidth),
-					baseStyle)
+					baseStyle, frame.gutterW, m.Advance())
 			}
 		} else {
 			renderStyledLine(dc, textX, y, lineBytes,
-				lineDecos, baseStyle, m)
+				lineDecos, baseStyle, m, frame.gutterW)
 		}
 	}
 }
@@ -594,7 +647,7 @@ func decosForLine(decos []buffer.Decoration, line int) []buffer.Decoration {
 
 // renderStyledLine draws a line split into styled spans per the
 // token decorations. Decorations must be DecoToken and sorted by
-// start col.
+// start col. clipLeft prevents text from drawing left of that x.
 func renderStyledLine(
 	dc *gui.DrawContext,
 	x, y float32,
@@ -602,6 +655,7 @@ func renderStyledLine(
 	decos []buffer.Decoration,
 	base gui.TextStyle,
 	m *text.Measurer,
+	clipLeft float32,
 ) {
 	if m == nil || len(lineBytes) == 0 {
 		return
@@ -609,6 +663,7 @@ func renderStyledLine(
 	originX := x
 	col := 0 // current byte offset
 	tw := m.TabWidth
+	adv := m.Advance()
 
 	for _, d := range decos {
 		startCol := d.Range.Start.ByteCol
@@ -623,7 +678,7 @@ func renderStyledLine(
 			vcol := text.VisualCols(lineBytes, col, tw)
 			gap := text.ExpandTabsSpan(
 				lineBytes[col:startCol], vcol, tw)
-			dc.Text(x, y, gap, base)
+			textLeftClip(dc, x, y, gap, base, clipLeft, adv)
 			x = originX + m.XForColumn(lineBytes, startCol)
 		}
 
@@ -635,7 +690,7 @@ func renderStyledLine(
 		if d.FgColor != 0 {
 			style.Color = decoColorToGUI(d.FgColor)
 		}
-		dc.Text(x, y, span, style)
+		textLeftClip(dc, x, y, span, style, clipLeft, adv)
 		col = endCol
 		x = originX + m.XForColumn(lineBytes, col)
 	}
@@ -643,9 +698,41 @@ func renderStyledLine(
 	// Emit trailing unstyled text.
 	if col < len(lineBytes) {
 		vcol := text.VisualCols(lineBytes, col, tw)
-		dc.Text(x, y, text.ExpandTabsSpan(
-			lineBytes[col:], vcol, tw), base)
+		textLeftClip(dc, x, y, text.ExpandTabsSpan(
+			lineBytes[col:], vcol, tw), base, clipLeft, adv)
 	}
+}
+
+// textLeftClip calls dc.Text but skips leading runes where x < clipLeft.
+// s must be tab-expanded. advance is the monospace cell width.
+func textLeftClip(dc *gui.DrawContext, x, y float32, s string, style gui.TextStyle, clipLeft, advance float32) {
+	if len(s) == 0 {
+		return
+	}
+	// advance <= 0 also catches NaN (NaN comparisons are always false,
+	// so !(advance > 0) is the safe guard).
+	if x >= clipLeft || !(advance > 0) {
+		dc.Text(x, y, s, style)
+		return
+	}
+	// Ceiling: minimum runes to skip so draw x >= clipLeft.
+	// math.Ceil handles exact multiples (e.g. need=24, adv=8 → skip=3,
+	// not 4). Cap at len(s) to guard against int overflow on huge clipLeft.
+	need := clipLeft - x
+	skip := int(math.Ceil(float64(need) / float64(advance)))
+	if skip < 1 || skip > len(s) {
+		skip = len(s)
+	}
+	i, n := 0, 0
+	for n < skip && i < len(s) {
+		_, sz := utf8.DecodeRuneInString(s[i:])
+		i += sz
+		n++
+	}
+	if i >= len(s) {
+		return
+	}
+	dc.Text(x+float32(n)*advance, y, s[i:], style)
 }
 
 // decoColorToGUI converts 0xRRGGBBAA to gui.Color.

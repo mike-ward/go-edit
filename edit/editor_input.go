@@ -51,13 +51,7 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 			invalidateSent = true
 		}
 
-		// Sync tab width from buffer indent config each frame.
-		// LangConfig overrides autodetected indent.
-		if tw := resolveLangConfig(cfg).TabWidth; tw > 0 {
-			st.Measurer.TabWidth = tw
-		} else if tw := cfg.Buffer.Props.IndentStyle.Width; tw > 0 {
-			st.Measurer.TabWidth = tw
-		}
+		applyTabWidth(cfg, st.Measurer)
 
 		lh := st.Measurer.LineHeight()
 		advance := st.Measurer.Advance()
@@ -91,64 +85,14 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 			}
 		}
 
-		// Mark visual-row cache dirty on any buffer edit.
-		if wrapActive && visRowsEditRemove == nil {
-			visRowsEditRemove = cfg.Buffer.OnEdit(
-				func(_ buffer.Change) {
-					frame.visRowsDirty = true
-				})
-		} else if !wrapActive && visRowsEditRemove != nil {
-			visRowsEditRemove()
-			visRowsEditRemove = nil
-		}
-
-		// Cache total visual rows (fold+wrap aware). Only
-		// recompute when inputs change (line count, wrap width,
-		// fold count, or buffer edit).
 		total := cfg.Buffer.LineCount()
-		needRecompute := frame.visRowsDirty ||
-			frame.visRowsCacheLines != total ||
-			frame.visRowsCacheWidth != frame.wrapWidth ||
-			frame.visRowsCacheFolds != len(st.FoldedRanges)
-		if needRecompute {
-			if wrapActive && st.Measurer != nil {
-				frame.totalVisRows = totalVisualRowsForBuffer(
-					cfg.Buffer, st.Measurer,
-					frame.wrapWidth, st.FoldedRanges)
-			} else if cfg.EnableFolding &&
-				len(st.FoldedRanges) > 0 {
-				frame.totalVisRows = visibleLineCount(
-					total, st.FoldedRanges)
-			} else {
-				frame.totalVisRows = total
-			}
-			frame.visRowsCacheLines = total
-			frame.visRowsCacheWidth = frame.wrapWidth
-			frame.visRowsCacheFolds = len(st.FoldedRanges)
-			frame.visRowsDirty = false
-		}
+		updateVisRowsCache(cfg, &st, frame, wrapActive, total,
+			&visRowsEditRemove)
 
 		clampScroll(&st, cfg, frame, lh)
 
-		// Max content width (horizontal scroll, no-wrap only).
-		if !wrapActive && maxContentEditRemove == nil &&
-			st.Measurer != nil {
-			maxContentEditRemove = cfg.Buffer.OnEdit(
-				func(_ buffer.Change) {
-					frame.maxContentDirty = true
-				})
-		} else if wrapActive && maxContentEditRemove != nil {
-			maxContentEditRemove()
-			maxContentEditRemove = nil
-		}
-		if !wrapActive && st.Measurer != nil &&
-			(frame.maxContentDirty ||
-				frame.maxContentCacheLines != total) {
-			frame.maxContentW = computeMaxContentWidth(
-				cfg.Buffer, st.Measurer)
-			frame.maxContentCacheLines = total
-			frame.maxContentDirty = false
-		}
+		updateMaxContentWidth(cfg, &st, frame, wrapActive, total,
+			&maxContentEditRemove)
 
 		// Clamp horizontal scroll.
 		textAreaW := cfg.Width - gutterW - advance/2
@@ -159,19 +103,11 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 			clampScrollX(&st, maxScrollX)
 		}
 
-		// Search match refresh + observer.
 		searchEditRemove = syncSearchObserver(
 			cfg, &st, w, searchEditRemove)
+		autoCloseRemove = syncAutoCloseFilter(cfg, autoCloseRemove)
+		foldEditRemove = syncFoldObserver(cfg, w, foldEditRemove)
 
-		// Auto-close filter.
-		autoCloseRemove = syncAutoCloseFilter(
-			cfg, autoCloseRemove)
-
-		// Fold invalidation observer.
-		foldEditRemove = syncFoldObserver(
-			cfg, w, foldEditRemove)
-
-		// Bracket match + sticky scroll (transient per frame).
 		computeBracketMatch(cfg, &st, frame)
 		computeStickyScroll(cfg, &st, frame, lh)
 
@@ -192,6 +128,85 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		frame.valid = true
 
 		storeState(w, cfg.IDFocus, st)
+	}
+}
+
+// applyTabWidth syncs the measurer's tab stop from LangConfig or
+// buffer indent settings. LangConfig takes precedence.
+func applyTabWidth(cfg EditorCfg, m *text.Measurer) {
+	if tw := resolveLangConfig(cfg).TabWidth; tw > 0 {
+		m.TabWidth = tw
+	} else if tw := cfg.Buffer.Props.IndentStyle.Width; tw > 0 {
+		m.TabWidth = tw
+	}
+}
+
+// updateVisRowsCache installs or removes the vis-rows dirty observer
+// and recomputes totalVisRows when the cache is stale.
+func updateVisRowsCache(
+	cfg EditorCfg,
+	st *editorState,
+	frame *editorFrameData,
+	wrapActive bool,
+	total int,
+	removePtr *func(),
+) {
+	if wrapActive && *removePtr == nil {
+		*removePtr = cfg.Buffer.OnEdit(func(_ buffer.Change) {
+			frame.visRowsDirty = true
+		})
+	} else if !wrapActive && *removePtr != nil {
+		(*removePtr)()
+		*removePtr = nil
+	}
+	stale := frame.visRowsDirty ||
+		frame.visRowsCacheLines != total ||
+		frame.visRowsCacheWidth != frame.wrapWidth ||
+		frame.visRowsCacheFolds != len(st.FoldedRanges)
+	if !stale {
+		return
+	}
+	if wrapActive && st.Measurer != nil {
+		frame.totalVisRows = totalVisualRowsForBuffer(
+			cfg.Buffer, st.Measurer,
+			frame.wrapWidth, st.FoldedRanges)
+	} else if cfg.EnableFolding && len(st.FoldedRanges) > 0 {
+		frame.totalVisRows = visibleLineCount(
+			total, st.FoldedRanges)
+	} else {
+		frame.totalVisRows = total
+	}
+	frame.visRowsCacheLines = total
+	frame.visRowsCacheWidth = frame.wrapWidth
+	frame.visRowsCacheFolds = len(st.FoldedRanges)
+	frame.visRowsDirty = false
+}
+
+// updateMaxContentWidth installs or removes the max-content dirty
+// observer and recomputes maxContentW when the cache is stale.
+func updateMaxContentWidth(
+	cfg EditorCfg,
+	st *editorState,
+	frame *editorFrameData,
+	wrapActive bool,
+	total int,
+	removePtr *func(),
+) {
+	if !wrapActive && *removePtr == nil && st.Measurer != nil {
+		*removePtr = cfg.Buffer.OnEdit(func(_ buffer.Change) {
+			frame.maxContentDirty = true
+		})
+	} else if wrapActive && *removePtr != nil {
+		(*removePtr)()
+		*removePtr = nil
+	}
+	if !wrapActive && st.Measurer != nil &&
+		(frame.maxContentDirty ||
+			frame.maxContentCacheLines != total) {
+		frame.maxContentW = computeMaxContentWidth(
+			cfg.Buffer, st.Measurer)
+		frame.maxContentCacheLines = total
+		frame.maxContentDirty = false
 	}
 }
 
