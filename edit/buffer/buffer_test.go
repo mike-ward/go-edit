@@ -300,3 +300,43 @@ func checkInvariants(t *testing.T, b *Buffer, step int) {
 		t.Fatalf("step %d: per-line sum=%d want %d", step, sum, wantSum)
 	}
 }
+
+func TestBuffer_VersionMonotonic(t *testing.T) {
+	b := New()
+	v0 := b.Version()
+
+	b.Apply(Edit{
+		Range:    Range{Start: Position{0, 0}, End: Position{0, 0}},
+		NewBytes: []byte("a"),
+	})
+	v1 := b.Version()
+	if v1 <= v0 {
+		t.Fatalf("version did not advance on insert: v0=%d v1=%d", v0, v1)
+	}
+
+	b.Apply(Edit{
+		Range:    Range{Start: Position{0, 0}, End: Position{0, 1}},
+		NewBytes: nil,
+	})
+	v2 := b.Version()
+	if v2 <= v1 {
+		t.Fatalf("version did not advance on delete: v1=%d v2=%d", v1, v2)
+	}
+
+	// A no-op edit still bumps the version — cheaper than detecting.
+	b.Apply(Edit{
+		Range:    Range{Start: Position{0, 0}, End: Position{0, 0}},
+		NewBytes: nil,
+	})
+	v3 := b.Version()
+	if v3 <= v2 {
+		t.Fatalf("version did not advance on empty edit: v2=%d v3=%d", v2, v3)
+	}
+}
+
+func TestBuffer_VersionNilReceiver(t *testing.T) {
+	var b *Buffer
+	if got := b.Version(); got != 0 {
+		t.Errorf("nil.Version() = %d, want 0", got)
+	}
+}

@@ -629,3 +629,97 @@ func TestEditor_ReuseLayoutDoesNotPanic(t *testing.T) {
 		amend(ly, w)
 	}
 }
+
+// TestEditor_DrawVersion_StableOnUnchangedFrame confirms the
+// per-frame draw version fold is deterministic: two consecutive
+// AmendLayout calls with no intervening state change produce the
+// same drawVersion (go-gui's DrawCanvas cache will then hit).
+func TestEditor_DrawVersion_StableOnUnchangedFrame(t *testing.T) {
+	buf := buffer.New()
+	buf.Apply(buffer.Edit{
+		Range: buffer.Range{
+			Start: buffer.Position{Line: 0, ByteCol: 0},
+			End:   buffer.Position{Line: 0, ByteCol: 0},
+		},
+		NewBytes: []byte("hello"),
+	})
+	cfg := EditorCfg{
+		IDFocus: 910, Buffer: buf, Width: 400, Height: 200,
+	}
+	frame := &editorFrameData{}
+	amend := editorAmendLayout(cfg, frame)
+	w := fakewin.New()
+	ly := &gui.Layout{Children: []gui.Layout{{Shape: &gui.Shape{}}}}
+
+	amend(ly, w)
+	v1 := frame.drawVersion
+	if v1 == 0 {
+		t.Fatal("drawVersion should never be 0 (collision with initial shape version)")
+	}
+	if got := ly.Children[0].Shape.Version; got != v1 {
+		t.Fatalf("shape.Version = %d, want %d", got, v1)
+	}
+
+	amend(ly, w)
+	v2 := frame.drawVersion
+	if v2 != v1 {
+		t.Fatalf("drawVersion drifted with no state change: v1=%d v2=%d", v1, v2)
+	}
+}
+
+// TestEditor_DrawVersion_ChangesOnEdit verifies the fold picks
+// up Buffer.Version changes — any edit forces a re-render.
+func TestEditor_DrawVersion_ChangesOnEdit(t *testing.T) {
+	buf := buffer.New()
+	cfg := EditorCfg{
+		IDFocus: 911, Buffer: buf, Width: 400, Height: 200,
+	}
+	frame := &editorFrameData{}
+	amend := editorAmendLayout(cfg, frame)
+	w := fakewin.New()
+	ly := &gui.Layout{Children: []gui.Layout{{Shape: &gui.Shape{}}}}
+
+	amend(ly, w)
+	v1 := frame.drawVersion
+
+	buf.Apply(buffer.Edit{
+		Range: buffer.Range{
+			Start: buffer.Position{Line: 0, ByteCol: 0},
+			End:   buffer.Position{Line: 0, ByteCol: 0},
+		},
+		NewBytes: []byte("x"),
+	})
+	amend(ly, w)
+	v2 := frame.drawVersion
+	if v1 == v2 {
+		t.Fatalf("drawVersion did not change after buffer edit: %d", v1)
+	}
+}
+
+// TestEditor_DrawVersion_ChangesOnScroll verifies scroll updates
+// invalidate the cache. Scroll is a pure visual change, not a
+// buffer change, so it must flow into the fold independently.
+func TestEditor_DrawVersion_ChangesOnScroll(t *testing.T) {
+	buf := buffer.FromBytes([]byte("a\nb\nc\nd\ne\nf\ng\nh\ni\nj"))
+	cfg := EditorCfg{
+		IDFocus: 912, Buffer: buf, Width: 400, Height: 32,
+	}
+	frame := &editorFrameData{}
+	amend := editorAmendLayout(cfg, frame)
+	w := fakewin.New()
+	ly := &gui.Layout{Children: []gui.Layout{{Shape: &gui.Shape{}}}}
+
+	amend(ly, w)
+	v1 := frame.drawVersion
+
+	// Mutate persisted scroll directly via StateMap.
+	st := loadState(w, cfg.IDFocus)
+	st.ScrollY = 50
+	storeState(w, cfg.IDFocus, st)
+
+	amend(ly, w)
+	v2 := frame.drawVersion
+	if v1 == v2 {
+		t.Fatalf("drawVersion did not change after scroll: %d", v1)
+	}
+}

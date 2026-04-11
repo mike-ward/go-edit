@@ -171,6 +171,11 @@ func applyPostAction(st *editorState, action Action) {
 // buffer edit. Called after each per-cursor edit to keep remaining
 // cursors in sync. skipIdx is the cursor that just edited (already
 // positioned correctly).
+//
+// Inlines adjustPos's early-return check so cursors strictly
+// before the edit avoid two function calls on the hot path —
+// important for large multi-cursor groups where this observer
+// fires once per edit per cursor (O(N*M) for N cursors × M edits).
 func adjustCursorsAfterEdit(cursors []CursorState, skipIdx int, c buffer.Change) {
 	delStart := c.Applied.Range.Start
 	delEnd := c.Applied.Range.End
@@ -179,8 +184,14 @@ func adjustCursorsAfterEdit(cursors []CursorState, skipIdx int, c buffer.Change)
 		if i == skipIdx {
 			continue
 		}
-		adjustPos(&cursors[i].Cursor, delStart, delEnd, endPos)
-		adjustPos(&cursors[i].Anchor, delStart, delEnd, endPos)
+		cs := &cursors[i]
+		// Fast skip: both cursor and anchor are strictly before
+		// the edit → no shift, no selection crossing.
+		if cs.Cursor.Before(delStart) && cs.Anchor.Before(delStart) {
+			continue
+		}
+		adjustPos(&cs.Cursor, delStart, delEnd, endPos)
+		adjustPos(&cs.Anchor, delStart, delEnd, endPos)
 	}
 }
 

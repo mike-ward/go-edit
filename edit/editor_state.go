@@ -87,6 +87,13 @@ type editorFrameData struct {
 	visRowsCacheFolds int
 	visRowsDirty      bool
 
+	// lineRowsCache stores the per-line visual row count at the
+	// cached wrap width. len == buf.LineCount() when valid.
+	// Populated by the full walk inside updateVisRowsCache and
+	// patched by the OnEdit observer on each subsequent edit so
+	// the next frame does not walk the buffer again.
+	lineRowsCache []int
+
 	// Max content width cache for horizontal scroll.
 	maxContentW          float32
 	maxContentCacheLines int
@@ -124,6 +131,13 @@ type editorFrameData struct {
 	// the same *gui.Layout across driver ticks stay benign.
 	frameSeq   uint64
 	lastLayout uintptr
+
+	// drawVersion is the DrawCanvas cache key written into the
+	// canvas shape at the end of editorAmendLayout. Computed by
+	// computeDrawVersion from every frame-visible input (buffer
+	// version, scroll, cursors, folds, toggles, wrap width, etc.).
+	// go-gui skips OnDraw when this matches the prior frame.
+	drawVersion uint64
 }
 
 func loadState(w *gui.Window, id uint32) editorState {

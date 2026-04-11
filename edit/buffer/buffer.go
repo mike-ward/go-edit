@@ -19,10 +19,21 @@ type Buffer struct {
 	lines    []*line
 	Props    FileProps
 	dirty    bool
+	version  uint64 // monotonic; bumped on every applyCore mutation
 	filters  []EditFilter
 	postEdit []PostEditFunc
 	marks    *MarkSet
 	undo     *undoStack
+}
+
+// Version returns a monotonic counter bumped on every buffer
+// mutation. Widgets use this as a cheap "has the buffer changed
+// since I last looked" check without diffing content.
+func (b *Buffer) Version() uint64 {
+	if b == nil {
+		return 0
+	}
+	return b.version
 }
 
 // New returns an empty buffer containing a single empty line.
@@ -234,6 +245,7 @@ func (b *Buffer) applyCore(e Edit, record bool) Change {
 	}
 
 	b.dirty = true
+	b.version++
 	old := b.bytesInRange(e.Range)
 
 	// Delete the range.

@@ -90,8 +90,14 @@ func Editor(cfg EditorCfg) gui.View {
 		a11yState = gui.AccessStateReadOnly
 	}
 
+	// Stable per-IDFocus canvas ID lets go-gui's DrawCanvas cache
+	// reuse tessellated output across frames whose Version hasn't
+	// changed. Distinct editors get distinct cache slots. The
+	// Version is mutated in-place on the canvas's shape at the end
+	// of editorAmendLayout so it reflects the current frame state.
+	canvasID := "edit.canvas." + strconv.FormatUint(uint64(cfg.IDFocus), 10)
 	canvas := gui.DrawCanvas(gui.DrawCanvasCfg{
-		// ID empty → skip draw cache; OnDraw runs every frame.
+		ID:              canvasID,
 		Width:           cfg.Width,
 		Height:          cfg.Height,
 		Clip:            true,

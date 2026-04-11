@@ -2,6 +2,7 @@ package edit
 
 import (
 	"maps"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
@@ -191,8 +192,101 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		frame.padLeft = advance / 2
 		frame.valid = true
 
+		// Compute the draw cache version after all frame state is
+		// populated, then write it into the DrawCanvas shape.
+		// layout.Children[0] is the canvas created in the Editor
+		// factory. If the layout shape has changed for any reason
+		// the fold result differs and go-gui re-tessellates.
+		frame.drawVersion = computeDrawVersion(cfg, &st, frame)
+		if len(layout.Children) > 0 &&
+			layout.Children[0].Shape != nil {
+			layout.Children[0].Shape.Version = frame.drawVersion
+		}
+
 		storeState(w, cfg.IDFocus, st)
 	}
+}
+
+// computeDrawVersion folds every frame-visible input into a single
+// uint64. go-gui's DrawCanvas cache is keyed by (ID, Version,
+// TessWidth, TessHeight); when the fold matches the prior frame
+// OnDraw is skipped and the cached tessellation is re-used.
+//
+// Inputs are hashed via FNV-1a. Float fields are converted through
+// math.Float32bits so equal values fold identically. Cursor blink
+// is deliberately NOT mixed in — when blink lands it must route
+// through a separate overlay layer, not invalidate this cache.
+func computeDrawVersion(
+	cfg EditorCfg, st *editorState, frame *editorFrameData,
+) uint64 {
+	const (
+		fnvOffset = 14695981039346656037
+		fnvPrime  = 1099511628211
+	)
+	fold := func(acc, v uint64) uint64 {
+		return (acc ^ v) * fnvPrime
+	}
+	v := uint64(fnvOffset)
+	if cfg.Buffer != nil {
+		v = fold(v, cfg.Buffer.Version())
+	}
+	v = fold(v, uint64(math.Float32bits(st.ScrollY)))
+	v = fold(v, uint64(math.Float32bits(st.ScrollX)))
+	v = fold(v, cursorFoldHash(st.Cursors))
+	v = fold(v, uint64(len(st.FoldedRanges))<<32|
+		uint64(len(st.Cursors)))
+	// Fold search state: active + query length + flags.
+	var searchMix uint64
+	if st.Search.Active {
+		searchMix |= 1
+	}
+	searchMix |= uint64(len(st.Search.Query)) << 8
+	if st.Search.CaseSensitive {
+		searchMix |= 1 << 24
+	}
+	if st.Search.IsRegex {
+		searchMix |= 1 << 25
+	}
+	v = fold(v, searchMix)
+	// Toggle flags + help state.
+	var toggles uint64
+	toggles |= uint64(st.WhitespaceOverride) & 0xff
+	toggles |= (uint64(st.WrapOverride) & 0xff) << 8
+	toggles |= (uint64(st.StickyScrollOverride) & 0xff) << 16
+	if st.HelpActive {
+		toggles |= 1 << 24
+	}
+	if frame.wrapActive {
+		toggles |= 1 << 25
+	}
+	if frame.bracketFound {
+		toggles |= 1 << 26
+	}
+	v = fold(v, toggles)
+	v = fold(v, uint64(math.Float32bits(frame.wrapWidth)))
+	v = fold(v, uint64(math.Float32bits(st.HelpScrollY)))
+	v = fold(v, uint64(frame.totalVisRows))
+	// Ensure a zero fold result never collides with the initial
+	// "never drawn" state (shape.Version starts at 0).
+	if v == 0 {
+		v = 1
+	}
+	return v
+}
+
+// cursorFoldHash folds every cursor's (line, col, anchor) into a
+// single uint64. Allocation-free.
+func cursorFoldHash(cursors []CursorState) uint64 {
+	const prime = 1099511628211
+	h := uint64(14695981039346656037)
+	for i := range cursors {
+		c := &cursors[i]
+		h = (h ^ uint64(c.Cursor.Line)) * prime
+		h = (h ^ uint64(c.Cursor.ByteCol)) * prime
+		h = (h ^ uint64(c.Anchor.Line)) * prime
+		h = (h ^ uint64(c.Anchor.ByteCol)) * prime
+	}
+	return h
 }
 
 // applyTabWidth syncs the measurer's tab stop from LangConfig or
@@ -205,8 +299,12 @@ func applyTabWidth(cfg EditorCfg, m *text.Measurer) {
 	}
 }
 
-// updateVisRowsCache installs or removes the vis-rows dirty observer
-// and recomputes totalVisRows when the cache is stale.
+// updateVisRowsCache installs or removes the vis-rows delta
+// observer and recomputes totalVisRows when the cache is stale.
+// When wrap is active, the observer patches lineRowsCache and
+// totalVisRows in place on each edit so the next frame does not
+// walk the buffer from scratch. A full walk only runs on wrap-
+// width changes, fold count changes, or the first frame.
 func updateVisRowsCache(
 	cfg EditorCfg,
 	st *editorState,
@@ -216,34 +314,146 @@ func updateVisRowsCache(
 	removePtr *func(),
 ) {
 	if wrapActive && *removePtr == nil {
-		*removePtr = cfg.Buffer.OnEdit(func(_ buffer.Change) {
-			frame.visRowsDirty = true
+		*removePtr = cfg.Buffer.OnEdit(func(c buffer.Change) {
+			applyVisRowsDelta(cfg.Buffer, frame, c)
 		})
 	} else if !wrapActive && *removePtr != nil {
 		(*removePtr)()
 		*removePtr = nil
+		frame.lineRowsCache = nil
 	}
 	stale := frame.visRowsDirty ||
 		frame.visRowsCacheLines != total ||
 		frame.visRowsCacheWidth != frame.wrapWidth ||
-		frame.visRowsCacheFolds != len(st.FoldedRanges)
+		frame.visRowsCacheFolds != len(st.FoldedRanges) ||
+		(wrapActive && len(frame.lineRowsCache) != total)
 	if !stale {
 		return
 	}
 	if wrapActive && st.Measurer != nil {
-		frame.totalVisRows = totalVisualRowsForBuffer(
-			cfg.Buffer, st.Measurer,
-			frame.wrapWidth, st.FoldedRanges)
-	} else if cfg.EnableFolding && len(st.FoldedRanges) > 0 {
-		frame.totalVisRows = visibleLineCount(
-			total, st.FoldedRanges)
+		frame.totalVisRows, frame.lineRowsCache =
+			buildLineRowsCache(cfg.Buffer, st.Measurer,
+				frame.wrapWidth, st.FoldedRanges,
+				frame.lineRowsCache)
 	} else {
-		frame.totalVisRows = total
+		frame.lineRowsCache = nil
+		if cfg.EnableFolding && len(st.FoldedRanges) > 0 {
+			frame.totalVisRows = visibleLineCount(
+				total, st.FoldedRanges)
+		} else {
+			frame.totalVisRows = total
+		}
 	}
 	frame.visRowsCacheLines = total
 	frame.visRowsCacheWidth = frame.wrapWidth
 	frame.visRowsCacheFolds = len(st.FoldedRanges)
 	frame.visRowsDirty = false
+}
+
+// buildLineRowsCache walks every logical line once, computing its
+// wrapped visual row count. The returned slice is reused if out is
+// pre-sized appropriately. Folded-interior lines contribute 0.
+func buildLineRowsCache(
+	buf *buffer.Buffer,
+	m *text.Measurer,
+	wrapWidth float32,
+	folds []FoldRange,
+	out []int,
+) (total int, cache []int) {
+	lc := buf.LineCount()
+	if cap(out) >= lc {
+		cache = out[:lc]
+	} else {
+		cache = make([]int, lc)
+	}
+	for i := range lc {
+		if len(folds) > 0 && isFolded(folds, i) {
+			cache[i] = 0
+			continue
+		}
+		rows := wrapLineVisualRowCount(buf.Line(i), m, wrapWidth)
+		cache[i] = rows
+		total += rows
+	}
+	return total, cache
+}
+
+// applyVisRowsDelta patches lineRowsCache and totalVisRows in
+// response to a single Change, avoiding a full-buffer walk on the
+// common edit-then-render path. Bails out by marking the cache
+// dirty if any precondition (measurer, wrap width, fold state,
+// cache length) looks unsafe — the next amend will rebuild.
+func applyVisRowsDelta(
+	buf *buffer.Buffer, frame *editorFrameData, c buffer.Change,
+) {
+	if frame == nil || buf == nil {
+		return
+	}
+	m := frame.state.Measurer
+	ww := frame.wrapWidth
+	if m == nil || ww <= 0 || ww != ww { // NaN
+		frame.visRowsDirty = true
+		return
+	}
+	folds := frame.state.FoldedRanges
+	// Defer to full rebuild when folds are active — the existing
+	// fold observer may run after this one and shift fold state,
+	// so the cheapest correct answer is to rebuild next frame.
+	if len(folds) > 0 {
+		frame.visRowsDirty = true
+		return
+	}
+	startLine := c.Applied.Range.Start.Line
+	endLineOld := c.Applied.Range.End.Line
+	endLineNew := c.AppliedRange.End.Line
+	if startLine < 0 || endLineOld < startLine || endLineNew < startLine {
+		frame.visRowsDirty = true
+		return
+	}
+	if len(frame.lineRowsCache) == 0 ||
+		endLineOld >= len(frame.lineRowsCache) {
+		// Cache not primed yet; let updateVisRowsCache do the
+		// full walk next frame.
+		frame.visRowsDirty = true
+		return
+	}
+	lc := buf.LineCount()
+	if endLineNew >= lc {
+		frame.visRowsDirty = true
+		return
+	}
+
+	oldSum := 0
+	for i := startLine; i <= endLineOld; i++ {
+		oldSum += frame.lineRowsCache[i]
+	}
+
+	// Compute new per-line rows. Re-use existing capacity by
+	// splicing into a single scratch slice.
+	newCount := endLineNew - startLine + 1
+	oldCount := endLineOld - startLine + 1
+	newSum := 0
+	newEntries := make([]int, newCount)
+	for i := range newCount {
+		line := startLine + i
+		rows := wrapLineVisualRowCount(buf.Line(line), m, ww)
+		newEntries[i] = rows
+		newSum += rows
+	}
+
+	// Splice newEntries in place of the old range.
+	if newCount == oldCount {
+		copy(frame.lineRowsCache[startLine:], newEntries)
+	} else {
+		tail := frame.lineRowsCache[endLineOld+1:]
+		spliced := make([]int, 0, startLine+newCount+len(tail))
+		spliced = append(spliced, frame.lineRowsCache[:startLine]...)
+		spliced = append(spliced, newEntries...)
+		spliced = append(spliced, tail...)
+		frame.lineRowsCache = spliced
+	}
+	frame.totalVisRows += newSum - oldSum
+	frame.visRowsCacheLines = len(frame.lineRowsCache)
 }
 
 // updateMaxContentWidth installs or removes the max-content dirty

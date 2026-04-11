@@ -3,6 +3,7 @@ package edit
 import (
 	"testing"
 
+	"github.com/mike-ward/go-edit/edit/buffer"
 	"github.com/mike-ward/go-edit/edit/text"
 )
 
@@ -190,6 +191,86 @@ func TestGlobalLogicalToVisualRow(t *testing.T) {
 		if got != tt.visRow {
 			t.Errorf("line %d: got %d, want %d",
 				tt.line, got, tt.visRow)
+		}
+	}
+}
+
+// TestVisRowsDelta_MatchesFullWalk feeds a random sequence of
+// edits through applyVisRowsDelta and compares the incrementally
+// maintained totalVisRows against totalVisualRowsForBuffer on the
+// mutated buffer. Any drift between the two is a W6 bug.
+func TestVisRowsDelta_MatchesFullWalk(t *testing.T) {
+	m := fakeMeasurer()
+	const wrapWidth float32 = 80
+
+	buf := buffer.FromBytes([]byte(
+		"short\n" +
+			"medium line that might wrap\n" +
+			"01234567890123456789012345678901234567890123456789\n" +
+			"tail\n" +
+			"last"))
+
+	frame := &editorFrameData{}
+	frame.state.Measurer = m
+	frame.wrapWidth = wrapWidth
+	frame.totalVisRows, frame.lineRowsCache = buildLineRowsCache(
+		buf, m, wrapWidth, nil, nil)
+	frame.visRowsCacheLines = buf.LineCount()
+	frame.visRowsCacheWidth = wrapWidth
+
+	// Attach the delta observer.
+	removeObs := buf.OnEdit(func(c buffer.Change) {
+		applyVisRowsDelta(buf, frame, c)
+	})
+	defer removeObs()
+
+	// Edit sequence: insert, delete, insert newline, delete
+	// newline, append at end.
+	pos := func(l, c int) buffer.Position {
+		return buffer.Position{Line: l, ByteCol: c}
+	}
+	edits := []buffer.Edit{
+		{ // insert mid-line 0
+			Range:    buffer.Range{Start: pos(0, 2), End: pos(0, 2)},
+			NewBytes: []byte("XYZ"),
+		},
+		{ // delete chars on line 1
+			Range:    buffer.Range{Start: pos(1, 3), End: pos(1, 5)},
+			NewBytes: nil,
+		},
+		{ // insert newline splitting line 2
+			Range:    buffer.Range{Start: pos(2, 10), End: pos(2, 10)},
+			NewBytes: []byte("\n"),
+		},
+		{ // join two lines
+			Range:    buffer.Range{Start: pos(0, 8), End: pos(1, 0)},
+			NewBytes: nil,
+		},
+		{ // insert multi-line block
+			Range:    buffer.Range{Start: pos(0, 0), End: pos(0, 0)},
+			NewBytes: []byte("alpha\nbeta\ngamma\n"),
+		},
+	}
+
+	for step, e := range edits {
+		buf.Apply(e)
+		if frame.visRowsDirty {
+			// Observer bailed out (cache unsafe); skip
+			// differential for this step — next amend would
+			// rebuild.
+			frame.totalVisRows, frame.lineRowsCache = buildLineRowsCache(
+				buf, m, wrapWidth, nil, frame.lineRowsCache)
+			frame.visRowsDirty = false
+			continue
+		}
+		want := totalVisualRowsForBuffer(buf, m, wrapWidth, nil)
+		if frame.totalVisRows != want {
+			t.Fatalf("step %d: incremental=%d full=%d",
+				step, frame.totalVisRows, want)
+		}
+		if len(frame.lineRowsCache) != buf.LineCount() {
+			t.Fatalf("step %d: cache len %d, line count %d",
+				step, len(frame.lineRowsCache), buf.LineCount())
 		}
 	}
 }
