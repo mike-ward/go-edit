@@ -29,7 +29,7 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 			return
 		}
 		guiTheme := gui.CurrentTheme()
-		monoStyle := guiTheme.M3
+		monoStyle := guiTheme.M5
 
 		// Help overlay replaces all buffer rendering.
 		if st.HelpActive && st.Measurer != nil {
@@ -39,6 +39,9 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 		}
 
 		rt := resolveEditorTheme(cfg.Theme)
+		if rt.background.IsSet() {
+			dc.FilledRect(0, 0, dc.Width, dc.Height, rt.background)
+		}
 		gutterStyle := monoStyle
 		if rt.gutterFg.IsSet() {
 			gutterStyle.Color = rt.gutterFg

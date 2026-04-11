@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/mike-ward/go-edit/edit"
 	"github.com/mike-ward/go-edit/edit/buffer"
@@ -41,18 +42,9 @@ type appState struct {
 	StickyScroll     bool
 	ShowWhitespace   edit.WhitespaceMode
 
-	GuiThemeIdx    int
 	ChromaStyleIdx int
 	RecentFiles    []string
 }
-
-// guiThemeEntry pairs a display name with a theme constructor.
-type guiThemeEntry struct {
-	Name  string
-	Theme gui.Theme
-}
-
-var guiThemes []guiThemeEntry
 
 // chromaStyleNames is populated at init from chroma's registry.
 var chromaStyleNames []string
@@ -92,14 +84,6 @@ var langConfigs = map[string]edit.LangConfig{
 var gApp *gui.App
 
 func init() {
-	guiThemes = []guiThemeEntry{
-		{"Dark", gui.ThemeDark},
-		{"Dark Bordered", gui.ThemeDarkBordered},
-		{"Light", gui.ThemeLight},
-		{"Light Bordered", gui.ThemeLightBordered},
-		{"Blue Bordered", gui.ThemeBlueBordered},
-	}
-
 	chromaStyleNames = styles.Names()
 	slices.Sort(chromaStyleNames)
 }
@@ -111,7 +95,6 @@ func main() {
 		ShowLineNumbers:  true,
 		ShowBracketMatch: true,
 		EnableFolding:    true,
-		GuiThemeIdx:      1, // Dark Bordered
 		ChromaStyleIdx:   slices.Index(chromaStyleNames, "monokai"),
 	}
 	if st.ChromaStyleIdx < 0 {
@@ -173,6 +156,21 @@ func createHighlighter(s *appState) *highlight.Highlighter {
 	return highlight.New(s.Buf, "", style)
 }
 
+// editorTheme builds an EditorTheme from the active chroma style.
+func editorTheme(s *appState) edit.EditorTheme {
+	style := styles.Get(chromaStyleNames[s.ChromaStyleIdx])
+	if style == nil {
+		return edit.EditorTheme{}
+	}
+	bg := style.Get(chroma.Background).Background
+	if !bg.IsSet() {
+		return edit.EditorTheme{}
+	}
+	return edit.EditorTheme{
+		Background: gui.RGBA(bg.Red(), bg.Green(), bg.Blue(), 255),
+	}
+}
+
 // ---- Main View ----
 
 func mainView(w *gui.Window) gui.View {
@@ -202,7 +200,7 @@ func mainView(w *gui.Window) gui.View {
 		LineWrap:         s.LineWrap,
 		StickyScroll:     s.StickyScroll,
 		LangConfigs:      langConfigs,
-		Theme:            edit.ThemeFromGUI(),
+		Theme:            editorTheme(s),
 		Decorations:      decos,
 		OnInvalidate: func(redraw func()) {
 			if s.HL != nil {
@@ -212,10 +210,12 @@ func mainView(w *gui.Window) gui.View {
 	})
 
 	return gui.Column(gui.ContainerCfg{
-		Width:   float32(ww),
-		Height:  float32(wh),
-		Sizing:  gui.FixedFixed,
-		Padding: gui.NoPadding,
+		Width:      float32(ww),
+		Height:     float32(wh),
+		Sizing:     gui.FixedFixed,
+		Padding:    gui.NoPadding,
+		SizeBorder: gui.NoBorder,
+		Spacing:    gui.Some[float32](0),
 		Content: []gui.View{
 			editorView,
 			statusBar(w, s, theme),
@@ -250,6 +250,7 @@ func statusBar(
 		Sizing:    gui.FillFixed,
 		Color:     gui.RGBA(30, 30, 30, 255),
 		Padding:   gui.NoPadding,
+		VAlign:    gui.VAlignMiddle,
 		Content: []gui.View{
 			gui.Text(gui.TextCfg{Text: posText + dirty, TextStyle: ts}),
 			// spacer
@@ -361,43 +362,22 @@ func registerCommands(w *gui.Window) {
 	_ = w.RegisterCommands(
 		gui.Command{
 			ID: "file.new", Label: "New",
-			Shortcut: gui.Shortcut{
-				Key: gui.KeyN, Modifiers: gui.ModSuper,
-			},
-			Global:  true,
 			Execute: func(_ *gui.Event, w *gui.Window) { cmdNew(w) },
 		},
 		gui.Command{
 			ID: "file.open", Label: "Open…",
-			Shortcut: gui.Shortcut{
-				Key: gui.KeyO, Modifiers: gui.ModSuper,
-			},
-			Global:  true,
 			Execute: func(_ *gui.Event, w *gui.Window) { cmdOpen(w) },
 		},
 		gui.Command{
 			ID: "file.save", Label: "Save",
-			Shortcut: gui.Shortcut{
-				Key: gui.KeyS, Modifiers: gui.ModSuper,
-			},
-			Global:  true,
 			Execute: func(_ *gui.Event, w *gui.Window) { cmdSave(w) },
 		},
 		gui.Command{
 			ID: "file.saveAs", Label: "Save As…",
-			Shortcut: gui.Shortcut{
-				Key:       gui.KeyS,
-				Modifiers: gui.ModSuper | gui.ModShift,
-			},
-			Global:  true,
 			Execute: func(_ *gui.Event, w *gui.Window) { cmdSaveAs(w) },
 		},
 		gui.Command{
 			ID: "file.close", Label: "Close",
-			Shortcut: gui.Shortcut{
-				Key: gui.KeyW, Modifiers: gui.ModSuper,
-			},
-			Global:  true,
 			Execute: func(_ *gui.Event, w *gui.Window) { cmdClose(w) },
 		},
 	)
@@ -604,16 +584,6 @@ func rebuildMenu(s *appState, w *gui.Window) {
 		)
 	}
 
-	// View > GUI Theme submenu.
-	var guiThemeItems []gui.NativeMenuItemCfg
-	for i, t := range guiThemes {
-		guiThemeItems = append(guiThemeItems, gui.NativeMenuItemCfg{
-			ID:      fmt.Sprintf("theme.gui.%d", i),
-			Text:    t.Name,
-			Checked: i == s.GuiThemeIdx,
-		})
-	}
-
 	// View > Syntax Theme submenu.
 	var syntaxItems []gui.NativeMenuItemCfg
 	for i, name := range chromaStyleNames {
@@ -681,8 +651,6 @@ func rebuildMenu(s *appState, w *gui.Window) {
 					{ID: "view.whitespace", Text: "Whitespace",
 						Checked: s.ShowWhitespace != edit.WhitespaceNone},
 					{Separator: true},
-					{ID: "theme.gui", Text: "GUI Theme",
-						Submenu: guiThemeItems},
 					{ID: "theme.syntax", Text: "Syntax Theme",
 						Submenu: syntaxItems},
 				},
@@ -731,16 +699,6 @@ func handleMenuAction(id string, w *gui.Window) {
 			s.ShowWhitespace = edit.WhitespaceNone
 		}
 		rebuildMenu(s, w)
-
-	// GUI theme.
-	case strings.HasPrefix(id, "theme.gui."):
-		var idx int
-		if _, err := fmt.Sscanf(id, "theme.gui.%d", &idx); err == nil &&
-			idx >= 0 && idx < len(guiThemes) {
-			s.GuiThemeIdx = idx
-			gui.SetTheme(guiThemes[idx].Theme)
-			rebuildMenu(s, w)
-		}
 
 	// Syntax theme.
 	case strings.HasPrefix(id, "theme.syntax."):
