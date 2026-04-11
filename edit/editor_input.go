@@ -121,6 +121,41 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 			frame.helpEntries = gatherHelp(hs)
 		}
 
+		// Execute action queued via TriggerAction (e.g. native menu).
+		if st.PendingAction != "" {
+			actionID := st.PendingAction
+			st.PendingAction = ""
+			// cfg.Actions override defaultActions, matching editorOnKeyDown.
+			action, ok := cfg.Actions[actionID]
+			if !ok {
+				action, ok = defaultActions[actionID]
+			}
+			if ok && (!cfg.ReadOnly || !isEditAction(actionID)) {
+				isEdit := isEditAction(actionID)
+				if isEdit && actionID != "edit.undo" &&
+					actionID != "edit.redo" {
+					cfg.Buffer.SetUndoCursorState(
+						buildUndoCursorState(&st))
+				}
+				if action.PerCursor && len(st.Cursors) > 1 {
+					dispatchPerCursor(cfg, &st, cfg.Buffer, w,
+						action, isEdit)
+				} else {
+					action.Execute(cfg, &st, cfg.Buffer, w)
+					applyPostAction(&st, action)
+				}
+				sortAndMerge(&st)
+				// Snap cursors out of any fold the action landed in.
+				if cfg.EnableFolding && len(st.FoldedRanges) > 0 {
+					for i := range st.Cursors {
+						snapCursorOutOfFold(&st.Cursors[i],
+							st.FoldedRanges)
+					}
+				}
+				ensureCursorVisible(&st, frame, cfg)
+			}
+		}
+
 		frame.state = st
 		frame.lineHeight = lh
 		frame.gutterW = gutterW

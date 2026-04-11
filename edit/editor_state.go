@@ -41,6 +41,10 @@ type editorState struct {
 	// Help screen overlay.
 	HelpActive  bool
 	HelpScrollY float32
+
+	// PendingAction holds an action ID to execute on the next
+	// AmendLayout pass. Set via TriggerAction; cleared after use.
+	PendingAction string
 }
 
 // primary returns a pointer to the primary cursor (index 0).

@@ -532,3 +532,57 @@ func TestOnClick_CanvasOriginNaNGuard(t *testing.T) {
 			d.frame.canvasOriginY)
 	}
 }
+
+// ---------- TriggerAction hardening ----------
+
+func TestTriggerAction_NilWindowNoPanic(t *testing.T) {
+	// Must not panic.
+	TriggerAction(nil, 1, "edit.undo")
+}
+
+func TestTriggerAction_EmptyActionIDNoPanic(t *testing.T) {
+	w := fakewin.New()
+	TriggerAction(w, 1, "")
+	st := loadState(w, 1)
+	if st.PendingAction != "" {
+		t.Errorf("PendingAction=%q, want empty", st.PendingAction)
+	}
+}
+
+func TestTriggerAction_UnknownIDStoredButNoOp(t *testing.T) {
+	buf := mkBuf("hello")
+	d := newDriver(EditorCfg{
+		IDFocus: 300, Buffer: buf, Width: 400, Height: 200,
+	})
+	d.tick()
+	TriggerAction(d.w, 300, "no.such.action")
+	// tick must not panic; buffer must be unchanged.
+	d.tick()
+	if buf.LineCount() != 1 || string(buf.Line(0)) != "hello" {
+		t.Errorf("buffer changed on unknown action")
+	}
+}
+
+func TestTriggerAction_ReadOnlyBlocksEditAction(t *testing.T) {
+	buf := mkBuf("hello")
+	buf.EnableUndo(nil)
+	buf.Apply(buffer.Edit{
+		Range:    buffer.Range{},
+		NewBytes: []byte("x"),
+	})
+	// buffer is now "xhello"; undo would revert it.
+	d := newDriver(EditorCfg{
+		IDFocus:  301,
+		Buffer:   buf,
+		Width:    400,
+		Height:   200,
+		ReadOnly: true,
+	})
+	d.tick()
+	TriggerAction(d.w, 301, "edit.undo")
+	d.tick()
+	// ReadOnly: undo must not have fired.
+	if string(buf.Line(0)) != "xhello" {
+		t.Errorf("undo ran in read-only mode: got %q", string(buf.Line(0)))
+	}
+}

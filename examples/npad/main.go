@@ -6,6 +6,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -100,6 +101,7 @@ func main() {
 	if st.ChromaStyleIdx < 0 {
 		st.ChromaStyleIdx = 0
 	}
+	loadConfig(st)
 
 	// Load file from argv or create empty buffer.
 	if len(os.Args) > 1 {
@@ -451,6 +453,7 @@ func openFile(w *gui.Window, path string) {
 	s.FilePath = path
 	s.HL = createHighlighter(s)
 	addRecentFile(s, path)
+	saveConfig(s)
 	rebuildMenu(s, w)
 }
 
@@ -500,6 +503,7 @@ func doSave(w *gui.Window, path string) {
 	oldPath := s.FilePath
 	s.FilePath = path
 	addRecentFile(s, path)
+	saveConfig(s)
 
 	// Recreate highlighter if extension changed (new lexer).
 	newExt := filepath.Ext(path)
@@ -558,7 +562,7 @@ func confirmSave(w *gui.Window, msg string, onConfirm func(*gui.Window)) {
 				}
 			case gui.DialogDiscard:
 				onConfirm(w)
-			// DialogCancel / DialogError: do nothing.
+				// DialogCancel / DialogError: do nothing.
 			}
 		},
 	})
@@ -641,12 +645,12 @@ func rebuildMenu(s *appState, w *gui.Window) {
 					{ID: "edit.redo", Text: "Redo",
 						Shortcut: gui.Shortcut{Key: gui.KeyZ, Modifiers: gui.ModSuper | gui.ModShift}},
 					{Separator: true},
-					{ID: "edit.find", Text: "Find",
+					{ID: "find.open", Text: "Find",
 						Shortcut: gui.Shortcut{Key: gui.KeyF, Modifiers: gui.ModSuper}},
-					{ID: "edit.replace", Text: "Replace",
+					{ID: "find.openReplace", Text: "Replace",
 						Shortcut: gui.Shortcut{Key: gui.KeyH, Modifiers: gui.ModSuper}},
 					{Separator: true},
-					{ID: "edit.comment", Text: "Toggle Comment",
+					{ID: "edit.toggleComment", Text: "Toggle Comment",
 						Shortcut: gui.Shortcut{Key: gui.KeySlash, Modifiers: gui.ModSuper}},
 				},
 			},
@@ -691,6 +695,18 @@ func handleMenuAction(id string, w *gui.Window) {
 	s := gui.State[appState](w)
 
 	switch {
+	// Edit actions delegated to the editor widget.
+	case id == "edit.undo":
+		edit.TriggerAction(w, focusEditor, "edit.undo")
+	case id == "edit.redo":
+		edit.TriggerAction(w, focusEditor, "edit.redo")
+	case id == "find.open":
+		edit.TriggerAction(w, focusEditor, "find.open")
+	case id == "find.openReplace":
+		edit.TriggerAction(w, focusEditor, "find.openReplace")
+	case id == "edit.toggleComment":
+		edit.TriggerAction(w, focusEditor, "edit.toggleComment")
+
 	// View toggles.
 	case id == "view.lineNumbers":
 		s.ShowLineNumbers = !s.ShowLineNumbers
@@ -725,6 +741,7 @@ func handleMenuAction(id string, w *gui.Window) {
 				s.HL.Close()
 			}
 			s.HL = createHighlighter(s)
+			saveConfig(s)
 			rebuildMenu(s, w)
 			w.UpdateView(mainView)
 		}
@@ -733,6 +750,7 @@ func handleMenuAction(id string, w *gui.Window) {
 	case strings.HasPrefix(id, "recent."):
 		if id == "recent.clear" {
 			s.RecentFiles = nil
+			saveConfig(s)
 			rebuildMenu(s, w)
 			return
 		}
@@ -765,8 +783,88 @@ func handleMenuAction(id string, w *gui.Window) {
 	case id == "help.about":
 		w.NativeMessageDialog(gui.NativeMessageDialogCfg{
 			Title: "About npad",
-			Body:  "npad — a go-edit showcase editor\nBuilt with go-gui",
+			Body: "npad — a go-edit showcase editor\n" +
+				"Built with go-gui\n\n" +
+				"https://github.com/mike-ward/go-edit",
 			Level: gui.AlertInfo,
 		})
 	}
+}
+
+// ---- Config persistence ----
+
+// npadConfig is persisted to disk across sessions.
+type npadConfig struct {
+	ChromaStyleIdx int      `json:"chromaStyleIdx"`
+	RecentFiles    []string `json:"recentFiles,omitempty"`
+}
+
+func configPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "npad", "state.json")
+}
+
+// maxConfigBytes caps the config file read to prevent OOM on a
+// corrupt or malicious file (a few KB is ample for valid state).
+const maxConfigBytes = 64 * 1024
+
+// maxPathBytes caps individual recent-file path length.
+const maxPathBytes = 4096
+
+func loadConfig(s *appState) {
+	if s == nil {
+		return
+	}
+	p := configPath()
+	if p == "" {
+		return
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	data := make([]byte, maxConfigBytes+1)
+	n, _ := f.Read(data)
+	if n > maxConfigBytes {
+		return // file too large; ignore
+	}
+	var cfg npadConfig
+	if err := json.Unmarshal(data[:n], &cfg); err != nil {
+		return
+	}
+	if cfg.ChromaStyleIdx >= 0 && cfg.ChromaStyleIdx < len(chromaStyleNames) {
+		s.ChromaStyleIdx = cfg.ChromaStyleIdx
+	}
+	recent := cfg.RecentFiles[:min(len(cfg.RecentFiles), maxRecent)]
+	s.RecentFiles = s.RecentFiles[:0]
+	for _, p := range recent {
+		if p != "" && len(p) <= maxPathBytes {
+			s.RecentFiles = append(s.RecentFiles, p)
+		}
+	}
+}
+
+func saveConfig(s *appState) {
+	if s == nil {
+		return
+	}
+	p := configPath()
+	if p == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return
+	}
+	data, err := json.MarshalIndent(npadConfig{
+		ChromaStyleIdx: s.ChromaStyleIdx,
+		RecentFiles:    s.RecentFiles,
+	}, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(p, data, 0o644)
 }
