@@ -138,6 +138,14 @@ func main() {
 	backend.RunApp(gApp, w)
 }
 
+// syncTitle updates the OS window title if it differs from the
+// computed one. Cheap no-op when unchanged.
+func syncTitle(w *gui.Window, s *appState) {
+	if t := windowTitle(s); t != w.Config.Title {
+		w.SetTitle(t)
+	}
+}
+
 // windowTitle returns the title bar string.
 func windowTitle(s *appState) string {
 	name := "Untitled"
@@ -179,6 +187,10 @@ func mainView(w *gui.Window) gui.View {
 	ww, wh := w.WindowSize()
 	s := gui.State[appState](w)
 	theme := gui.CurrentTheme()
+
+	// Sync OS title so dirty-flag transitions from typing update
+	// "[modified]". Explicit syncTitle calls cover file ops.
+	syncTitle(w, s)
 
 	editorW := float32(ww)
 	editorH := float32(wh) - statusBarH
@@ -408,6 +420,8 @@ func doNew(w *gui.Window) {
 	s.Buf.EnableUndo(nil)
 	s.FilePath = ""
 	s.HL = createHighlighter(s)
+	syncTitle(w, s)
+	w.UpdateWindow()
 }
 
 func cmdOpen(w *gui.Window) {
@@ -455,6 +469,8 @@ func openFile(w *gui.Window, path string) {
 	addRecentFile(s, path)
 	saveConfig(s)
 	rebuildMenu(s, w)
+	syncTitle(w, s)
+	w.UpdateWindow()
 }
 
 func cmdSave(w *gui.Window) {
@@ -515,6 +531,8 @@ func doSave(w *gui.Window, path string) {
 		s.HL = createHighlighter(s)
 	}
 	rebuildMenu(s, w)
+	syncTitle(w, s)
+	w.UpdateWindow()
 }
 
 func cmdClose(w *gui.Window) {
