@@ -31,7 +31,7 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 			return
 		}
 		guiTheme := gui.CurrentTheme()
-		monoStyle := guiTheme.M5
+		monoStyle := editorMonoStyle(guiTheme)
 
 		// Help overlay replaces all buffer rendering.
 		if st.HelpActive && st.Measurer != nil {

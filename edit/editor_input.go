@@ -36,7 +36,7 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 	return func(layout *gui.Layout, w *gui.Window) {
 		st := loadState(w, cfg.IDFocus)
 		if st.Measurer == nil {
-			st.Measurer = text.New(w, gui.CurrentTheme().M3)
+			st.Measurer = text.New(w, editorMonoStyle(gui.CurrentTheme()))
 			if st.Measurer == nil {
 				// No backend (headless). Bail; draw will no-op.
 				frame.valid = false

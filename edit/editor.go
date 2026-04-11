@@ -43,6 +43,14 @@ type EditorCfg struct {
 	OnInvalidate func(func())
 }
 
+// editorMonoStyle returns the TextStyle used for all editor text
+// rendering. Both the draw path and the Measurer must use this same
+// style so the cached monospace advance matches rendered glyph width;
+// drift between the two sites causes visible per-character gaps.
+func editorMonoStyle(theme gui.Theme) gui.TextStyle {
+	return theme.M5
+}
+
 // minDimension is the smallest viewport width/height the editor will
 // accept. Smaller values (including NaN/negative) are clamped up.
 const minDimension float32 = 1

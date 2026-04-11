@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/mike-ward/go-edit/edit/buffer"
+	"github.com/mike-ward/go-gui/gui"
 )
 
 func mkCursor(line, col int) CursorState {
@@ -206,5 +207,35 @@ func TestEditorFactoryBuilds(t *testing.T) {
 	})
 	if v == nil {
 		t.Fatal("Editor returned nil")
+	}
+}
+
+// TestEditor_MeasurerUsesDrawStyle pins the invariant that the text
+// Measurer is built with the same TextStyle that editorOnDraw uses to
+// render glyphs. Drift between the two sites caches a monospace
+// advance that no longer matches the rendered glyph width, producing
+// visible per-character gaps inside any styled (chroma-highlighted)
+// line. Regression guard for the M3→M5 mismatch in editor_input.go.
+func TestEditor_MeasurerUsesDrawStyle(t *testing.T) {
+	d := newDriver(EditorCfg{
+		IDFocus: 1,
+		Buffer:  mkBuf("hello"),
+		Width:   400,
+		Height:  200,
+	})
+	d.tick() // amend builds the Measurer
+	m := d.state().Measurer
+	if m == nil {
+		t.Fatal("Measurer is nil after amend")
+	}
+	got := m.Style()
+	want := editorMonoStyle(gui.CurrentTheme())
+	if got.Size != want.Size {
+		t.Errorf("Measurer style.Size=%v, want %v (draw path style)",
+			got.Size, want.Size)
+	}
+	if got.Family != want.Family {
+		t.Errorf("Measurer style.Family=%q, want %q",
+			got.Family, want.Family)
 	}
 }
