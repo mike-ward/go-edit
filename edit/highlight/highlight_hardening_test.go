@@ -1,8 +1,10 @@
 package highlight
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/alecthomas/chroma/v2"
 	"github.com/mike-ward/go-edit/edit/buffer"
 )
 
@@ -120,6 +122,125 @@ func TestHighlighter_IncrementalPreservesPrefix(t *testing.T) {
 			t.Fatalf("line 0 token %d drifted: %+v -> %+v",
 				i, line0Before[i], h.tokens[0][i])
 		}
+	}
+}
+
+// TestHighlighter_CapsTokensPerLine confirms that a single
+// logical line producing more than maxTokensPerLine chroma
+// tokens has its cache truncated at the cap. Prevents unbounded
+// per-line growth on pathological minified inputs.
+func TestHighlighter_CapsTokensPerLine(t *testing.T) {
+	// Build a Go source line with ~6k tokens: identifier + ';'
+	// pairs. Each `a` is one token, each `;` is another. 3100
+	// pairs → 6200 tokens, well above the 4096 cap.
+	const pairs = 3100
+	var sb strings.Builder
+	sb.WriteString("package main\nfunc f() {\n")
+	for range pairs {
+		sb.WriteString("a;")
+	}
+	sb.WriteString("\n}\n")
+	buf := buffer.FromBytes([]byte(sb.String()))
+	buf.Props.FilePath = "cap.go"
+	h := New(buf, "", nil)
+	if h == nil {
+		t.Skip("no Go lexer")
+	}
+	defer h.Close()
+
+	_ = h.Decorate(buffer.Viewport{FirstLine: 0, LastLine: 4}, nil)
+
+	// Line 2 is the `a;a;...` line.
+	if len(h.tokens) < 3 {
+		t.Fatalf("tokens len = %d, want >= 3", len(h.tokens))
+	}
+	if got := len(h.tokens[2]); got > maxTokensPerLine {
+		t.Errorf("line 2 tokens = %d, want <= %d",
+			got, maxTokensPerLine)
+	}
+	// Sanity: the cap should have actually kicked in given the
+	// input size. Otherwise the test is no longer exercising
+	// the branch (e.g., chroma changed its tokenization).
+	if got := len(h.tokens[2]); got < maxTokensPerLine {
+		t.Errorf("line 2 tokens = %d — test input no longer "+
+			"triggers the cap; regenerate", got)
+	}
+}
+
+// TestIsMultilineTokenType_Categories pins the category decisions
+// used by the incremental retokenize restart logic. Only definite
+// positives (Comment*/String*) and definite negatives from
+// disjoint categories (Keyword, Punctuation, Name*) are asserted;
+// Literal siblings share a category in chroma's tree so their
+// classification is chroma-internal and safe either way (over-
+// back-off wastes work but produces correct output).
+func TestIsMultilineTokenType_Categories(t *testing.T) {
+	cases := []struct {
+		tt   chroma.TokenType
+		want bool
+		name string
+	}{
+		{chroma.Comment, true, "Comment"},
+		{chroma.CommentMultiline, true, "CommentMultiline"},
+		{chroma.CommentSingle, true, "CommentSingle"},
+		{chroma.String, true, "String"},
+		{chroma.LiteralString, true, "LiteralString"},
+		{chroma.LiteralStringDouble, true, "LiteralStringDouble"},
+		{chroma.Keyword, false, "Keyword"},
+		{chroma.Punctuation, false, "Punctuation"},
+		{chroma.NameFunction, false, "NameFunction"},
+		{chroma.Operator, false, "Operator"},
+	}
+	for _, tt := range cases {
+		if got := isMultilineTokenType(tt.tt); got != tt.want {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestResizeBools_GrowShrinkNil covers the grow, shrink, nil,
+// and cap-reuse branches of resizeBools.
+func TestResizeBools_GrowShrinkNil(t *testing.T) {
+	// Nil input, grow to 3.
+	got := resizeBools(nil, 3)
+	if len(got) != 3 {
+		t.Fatalf("nil grow: len = %d, want 3", len(got))
+	}
+	for i, v := range got {
+		if v {
+			t.Errorf("nil grow: entry %d = true, want false", i)
+		}
+	}
+	// Grow a small slice. Reuses capacity if available.
+	in := make([]bool, 2, 8)
+	in[0], in[1] = true, true
+	got = resizeBools(in, 5)
+	if len(got) != 5 {
+		t.Fatalf("small grow: len = %d, want 5", len(got))
+	}
+	if !got[0] || !got[1] {
+		t.Error("small grow: existing entries wiped")
+	}
+	for i := 2; i < 5; i++ {
+		if got[i] {
+			t.Errorf("small grow: entry %d = true, want false", i)
+		}
+	}
+	// Shrink.
+	in = []bool{true, true, true, true}
+	got = resizeBools(in, 2)
+	if len(got) != 2 {
+		t.Fatalf("shrink: len = %d, want 2", len(got))
+	}
+	if !got[0] || !got[1] {
+		t.Error("shrink: existing entries wiped")
+	}
+	// Cap exactly matches len.
+	in = make([]bool, 3)
+	in[2] = true
+	got = resizeBools(in, 3)
+	if !got[2] {
+		t.Error("cap-eq: existing entry wiped")
 	}
 }
 

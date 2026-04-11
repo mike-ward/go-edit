@@ -696,6 +696,133 @@ func TestEditor_DrawVersion_ChangesOnEdit(t *testing.T) {
 	}
 }
 
+// TestFloatBitsStable_PosNegZero verifies +0 and -0 fold to
+// the same value so cache keys don't drift across sign flips.
+func TestFloatBitsStable_PosNegZero(t *testing.T) {
+	pos := floatBitsStable(0.0)
+	neg := floatBitsStable(float32(math.Copysign(0, -1)))
+	if pos != neg {
+		t.Errorf("+0/-0 fold differently: %d vs %d", pos, neg)
+	}
+}
+
+// TestFloatBitsStable_NaN verifies every NaN bit pattern folds
+// to the canonical quiet NaN constant.
+func TestFloatBitsStable_NaN(t *testing.T) {
+	quiet := floatBitsStable(float32(math.NaN()))
+	// A different NaN bit pattern constructed via Float64bits.
+	altBits := math.Float64bits(math.NaN()) | 0x1
+	alt := floatBitsStable(float32(math.Float64frombits(altBits)))
+	if quiet != alt {
+		t.Errorf("NaN patterns differ: %d vs %d", quiet, alt)
+	}
+	if quiet == 0 {
+		t.Error("NaN should not fold to zero")
+	}
+}
+
+// TestFloatBitsStable_DistinctFinite verifies two distinct finite
+// floats produce distinct bits.
+func TestFloatBitsStable_DistinctFinite(t *testing.T) {
+	a := floatBitsStable(1.5)
+	b := floatBitsStable(2.5)
+	if a == b {
+		t.Errorf("1.5 and 2.5 fold identically: %d", a)
+	}
+}
+
+// TestEditor_DrawVersion_StableUnderNaNScroll confirms the
+// cache key fold normalizes NaN float bits so an upstream
+// sanitize failure cannot cause cache thrashing.
+func TestEditor_DrawVersion_StableUnderNaNScroll(t *testing.T) {
+	buf := buffer.FromBytes([]byte("hello"))
+	cfg := EditorCfg{
+		IDFocus: 920, Buffer: buf, Width: 400, Height: 200,
+	}
+	frame := &editorFrameData{}
+	amend := editorAmendLayout(cfg, frame)
+	w := fakewin.New()
+	ly := &gui.Layout{Children: []gui.Layout{{Shape: &gui.Shape{}}}}
+
+	// Inject a NaN directly via state — bypassing the normal
+	// clampScroll path — to verify the fold is stable.
+	st := loadState(w, cfg.IDFocus)
+	nan := float32(math.NaN())
+	st.ScrollY = nan
+	storeState(w, cfg.IDFocus, st)
+	amend(ly, w)
+	v1 := frame.drawVersion
+
+	// Re-inject a *different* NaN (multiple bit patterns) and
+	// confirm the hash is identical.
+	st = loadState(w, cfg.IDFocus)
+	st.ScrollY = float32(math.Float64frombits(
+		math.Float64bits(math.NaN()) | 1))
+	storeState(w, cfg.IDFocus, st)
+	amend(ly, w)
+	v2 := frame.drawVersion
+	if v1 != v2 {
+		t.Errorf("drawVersion drifted across NaN bit patterns: %d vs %d",
+			v1, v2)
+	}
+}
+
+// TestEditor_DrawVersion_ChangesOnFindBarState confirms every
+// find-bar visual knob (caret within same-length query, focus,
+// replace toggle, current match index) invalidates the draw
+// cache. Without this, the DrawCanvas cache would serve stale
+// find-bar pixels on those interactions.
+func TestEditor_DrawVersion_ChangesOnFindBarState(t *testing.T) {
+	buf := buffer.FromBytes([]byte("hello world"))
+	cfg := EditorCfg{
+		IDFocus: 915, Buffer: buf, Width: 400, Height: 200,
+	}
+	frame := &editorFrameData{}
+	amend := editorAmendLayout(cfg, frame)
+	w := fakewin.New()
+	ly := &gui.Layout{Children: []gui.Layout{{Shape: &gui.Shape{}}}}
+
+	// Prime with search active + a query.
+	{
+		st := loadState(w, cfg.IDFocus)
+		st.Search.Active = true
+		st.Search.Query = "hello"
+		st.Search.FieldCursor = 0
+		storeState(w, cfg.IDFocus, st)
+	}
+	amend(ly, w)
+	base := frame.drawVersion
+
+	mutate := func(name string, fn func(*editorState)) {
+		t.Helper()
+		st := loadState(w, cfg.IDFocus)
+		fn(&st)
+		storeState(w, cfg.IDFocus, st)
+		amend(ly, w)
+		if frame.drawVersion == base {
+			t.Fatalf("%s: drawVersion did not change", name)
+		}
+		base = frame.drawVersion
+	}
+
+	mutate("FieldCursor moves within same-length query",
+		func(st *editorState) { st.Search.FieldCursor = 3 })
+	mutate("ShowReplace toggles",
+		func(st *editorState) { st.Search.ShowReplace = true })
+	mutate("FocusReplace toggles",
+		func(st *editorState) { st.Search.FocusReplace = true })
+	mutate("ReplaceText grows",
+		func(st *editorState) { st.Search.ReplaceText = "x" })
+	mutate("CaseSensitive toggles",
+		func(st *editorState) { st.Search.CaseSensitive = true })
+	mutate("IsRegex toggles",
+		func(st *editorState) { st.Search.IsRegex = true })
+	mutate("InSelection toggles",
+		func(st *editorState) { st.Search.InSelection = true })
+	mutate("CurrentMatch changes",
+		func(st *editorState) { st.Search.CurrentMatch = 1 })
+}
+
 // TestEditor_DrawVersion_ChangesOnScroll verifies scroll updates
 // invalidate the cache. Scroll is a pure visual change, not a
 // buffer change, so it must flow into the fold independently.

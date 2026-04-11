@@ -38,16 +38,18 @@ type Binding struct {
 // Keymap is an ordered list of bindings. First match wins.
 //
 // Bindings is authoritative and is also used by the help overlay
-// for ordered enumeration. A lazily built lookup map accelerates
-// Resolve. Keymap is treated as immutable after first Resolve; if
-// a caller ever appends to Bindings after Resolve has built the
-// cache, they must set lookup = nil to force a rebuild.
+// for ordered enumeration. A lookup map accelerates Resolve, built
+// eagerly by KeymapStack.Push so Resolve is lock-free and safe to
+// call concurrently on a constructed stack. Keymap is treated as
+// immutable after Push; callers that mutate Bindings must Push a
+// fresh Keymap or nil out lookup themselves.
 type Keymap struct {
 	Name     string
 	Bindings []Binding
 
-	// lookup is a lazy cache keyed by packBinding(key, mods);
-	// built on first Resolve, nil until then.
+	// lookup is built by KeymapStack.Push from Bindings. nil
+	// means the Keymap has never been pushed; Resolve falls
+	// back to a linear scan to stay correct for ad-hoc test use.
 	lookup map[uint32]string
 }
 
@@ -80,9 +82,15 @@ type KeymapStack struct {
 }
 
 // Push adds a keymap layer on top. Nil keymaps are ignored.
+// Builds the layer's lookup map once here so subsequent Resolve
+// calls touch only reader state — Resolve is concurrency-safe on
+// a constructed stack.
 func (ks *KeymapStack) Push(km *Keymap) {
 	if km == nil {
 		return
+	}
+	if km.lookup == nil && len(km.Bindings) > 0 {
+		km.buildLookup()
 	}
 	ks.layers = append(ks.layers, km)
 }
@@ -100,13 +108,11 @@ func (ks *KeymapStack) Pop() *Keymap {
 
 // Resolve finds the action ID for a key+modifier combo,
 // searching top to bottom. Returns ("", false) if unbound.
+// Reader-only after Push has built the lookup maps.
 func (ks *KeymapStack) Resolve(key gui.KeyCode, mods gui.Modifier) (string, bool) {
 	pk := packBinding(key, mods)
 	for i := len(ks.layers) - 1; i >= 0; i-- {
 		layer := ks.layers[i]
-		if layer.lookup == nil && len(layer.Bindings) > 0 {
-			layer.buildLookup()
-		}
 		if id, ok := layer.lookup[pk]; ok {
 			return id, true
 		}

@@ -94,6 +94,12 @@ type editorFrameData struct {
 	// the next frame does not walk the buffer again.
 	lineRowsCache []int
 
+	// visRowsDeltaScratch is reused across applyVisRowsDelta
+	// calls to avoid a per-edit allocation for the new per-line
+	// row counts. Truncated to zero length at the start of each
+	// delta invocation.
+	visRowsDeltaScratch []int
+
 	// Max content width cache for horizontal scroll.
 	maxContentW          float32
 	maxContentCacheLines int

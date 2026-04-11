@@ -265,20 +265,26 @@ func (b *Buffer) Apply(e Edit) Change {
 // editWouldExceedMaxLine reports whether applying e would produce
 // any resulting line longer than MaxLineBytes. Used by Apply to
 // reject pathological edits before they reach applyCore.
+//
+// Hardening: any NewBytes payload larger than MaxLoadBytes is
+// rejected unconditionally — no valid edit should introduce more
+// bytes than the whole-buffer cap. This short-circuits the
+// bytes.Split allocation on adversarial 1 GiB paste payloads.
 func (b *Buffer) editWouldExceedMaxLine(e Edit) bool {
+	if len(e.NewBytes) > MaxLoadBytes {
+		return true
+	}
 	// Fast path: new bytes empty or small and no line grows.
 	if len(e.NewBytes) == 0 {
 		// Deletion only: never grows a line beyond its current
-		// length unless it joins two lines. Joined length is
-		// the sum of prefix + suffix minus deleted span.
+		// length unless it joins two lines. The collapsed line
+		// is first[:Start.ByteCol] + last[End.ByteCol:].
 		if e.Range.Start.Line == e.Range.End.Line {
 			return false
 		}
-		first := len(b.lines[e.Range.Start.Line].bytes())
-		last := len(b.lines[e.Range.End.Line].bytes())
+		lastLen := len(b.lines[e.Range.End.Line].bytes())
 		joined := e.Range.Start.ByteCol +
-			(last - e.Range.End.ByteCol)
-		_ = first // not used; joined reflects the result
+			(lastLen - e.Range.End.ByteCol)
 		return joined > MaxLineBytes
 	}
 	// Insertion or replace. Split NewBytes into segments to

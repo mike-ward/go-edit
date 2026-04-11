@@ -177,6 +177,156 @@ func TestApply_RejectsOverlongJoinDelete(t *testing.T) {
 	}
 }
 
+func TestApply_RejectsOverlongMultiSegmentFirstLine(t *testing.T) {
+	// Seed buffer line 0 with a prefix so that prefix + segs[0]
+	// exceeds MaxLineBytes even though each segment individually
+	// fits.
+	prefix := make([]byte, MaxLineBytes-5)
+	for i := range prefix {
+		prefix[i] = 'p'
+	}
+	b := FromBytes(prefix)
+	if len(b.Line(0)) != MaxLineBytes-5 {
+		t.Fatalf("setup: line 0 len = %d", len(b.Line(0)))
+	}
+	// First segment alone is 10 bytes; prefix(Max-5) + 10 > Max.
+	payload := append(make([]byte, 10), '\n')
+	for i := range 10 {
+		payload[i] = 'a'
+	}
+	payload = append(payload, 'z') // second segment
+	v := b.Version()
+	c := b.Apply(Edit{
+		Range: Range{
+			Start: Position{Line: 0, ByteCol: len(prefix)},
+			End:   Position{Line: 0, ByteCol: len(prefix)},
+		},
+		NewBytes: payload,
+	})
+	if c.Applied.NewBytes != nil || c.Applied.Range != (Range{}) {
+		t.Errorf("expected rejection on first-line overflow, got %+v", c)
+	}
+	if b.Version() != v {
+		t.Errorf("version advanced on rejected edit: %d -> %d",
+			v, b.Version())
+	}
+}
+
+func TestApply_RejectsOverlongMultiSegmentLastLine(t *testing.T) {
+	// Line 0 has a long suffix after the insertion column so
+	// segs[last] + suffix > MaxLineBytes, but each segment
+	// alone fits.
+	suffix := make([]byte, MaxLineBytes-5)
+	for i := range suffix {
+		suffix[i] = 's'
+	}
+	b := FromBytes(suffix)
+	// Insert at col 0: payload = "a\nBIG" where BIG (10 bytes)
+	// ends on the same post-edit line as the original suffix.
+	payload := []byte("a\n")
+	for range 10 {
+		payload = append(payload, 'z')
+	}
+	v := b.Version()
+	c := b.Apply(Edit{
+		Range: Range{
+			Start: Position{Line: 0, ByteCol: 0},
+			End:   Position{Line: 0, ByteCol: 0},
+		},
+		NewBytes: payload,
+	})
+	if c.Applied.NewBytes != nil || c.Applied.Range != (Range{}) {
+		t.Errorf("expected rejection on last-line overflow, got %+v", c)
+	}
+	if b.Version() != v {
+		t.Errorf("version advanced on rejected edit: %d -> %d",
+			v, b.Version())
+	}
+}
+
+func TestApply_RejectsOverlongMultiSegmentMiddleLine(t *testing.T) {
+	// Middle segment alone exceeds MaxLineBytes.
+	b := FromBytes([]byte(""))
+	big := make([]byte, MaxLineBytes+1)
+	for i := range big {
+		big[i] = 'm'
+	}
+	payload := append([]byte("head\n"), big...)
+	payload = append(payload, '\n')
+	payload = append(payload, 't', 'a', 'i', 'l')
+	v := b.Version()
+	c := b.Apply(Edit{
+		Range: Range{
+			Start: Position{Line: 0, ByteCol: 0},
+			End:   Position{Line: 0, ByteCol: 0},
+		},
+		NewBytes: payload,
+	})
+	if c.Applied.NewBytes != nil || c.Applied.Range != (Range{}) {
+		t.Errorf("expected rejection on middle-segment overflow, got %+v", c)
+	}
+	if b.Version() != v {
+		t.Errorf("version advanced on rejected edit: %d -> %d",
+			v, b.Version())
+	}
+}
+
+func TestApply_AcceptsMultiSegmentAtExactLimit(t *testing.T) {
+	// Every resulting line is exactly MaxLineBytes — must succeed.
+	seg := make([]byte, MaxLineBytes)
+	for i := range seg {
+		seg[i] = 'x'
+	}
+	payload := append(append(append([]byte{}, seg...), '\n'), seg...)
+	b := New()
+	c := b.Apply(Edit{
+		Range: Range{
+			Start: Position{Line: 0, ByteCol: 0},
+			End:   Position{Line: 0, ByteCol: 0},
+		},
+		NewBytes: payload,
+	})
+	if len(c.Applied.NewBytes) == 0 {
+		t.Fatal("edit at exact limit was rejected")
+	}
+	if b.LineCount() != 2 {
+		t.Errorf("LineCount = %d, want 2", b.LineCount())
+	}
+	for i := 0; i < b.LineCount(); i++ {
+		if len(b.Line(i)) != MaxLineBytes {
+			t.Errorf("line %d len = %d, want %d",
+				i, len(b.Line(i)), MaxLineBytes)
+		}
+	}
+}
+
+func TestApply_RejectsPayloadLargerThanMaxLoadBytes(t *testing.T) {
+	// A NewBytes payload exceeding MaxLoadBytes must be rejected
+	// without running bytes.Split on the payload — the guard is
+	// intended to block adversarial paste DoS.
+	b := New()
+	huge := make([]byte, MaxLoadBytes+1)
+	// Fill with a single byte; a real DoS payload would have
+	// many newlines to force the multi-segment path.
+	for i := range huge {
+		huge[i] = 'a'
+	}
+	c := b.Apply(Edit{
+		Range: Range{
+			Start: Position{Line: 0, ByteCol: 0},
+			End:   Position{Line: 0, ByteCol: 0},
+		},
+		NewBytes: huge,
+	})
+	if c.Applied.NewBytes != nil || c.Applied.Range != (Range{}) {
+		t.Fatalf("expected rejection, got change %+v", c)
+	}
+	if b.Version() != 0 {
+		t.Errorf("version advanced on rejected DoS edit: %d",
+			b.Version())
+	}
+}
+
 func TestApply_AcceptsEditAtExactLimit(t *testing.T) {
 	// An insert that produces a line of exactly MaxLineBytes
 	// must succeed — the check is "exceeds", not "equals".

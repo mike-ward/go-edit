@@ -195,6 +195,131 @@ func TestGlobalLogicalToVisualRow(t *testing.T) {
 	}
 }
 
+// TestUpdateVisRowsCache_FallsBackAboveCap verifies that when
+// the buffer exceeds maxLineRowsCacheLines, updateVisRowsCache
+// skips the persistent lineRowsCache and computes totalVisRows
+// via the full-walk fallback. The two paths must produce
+// identical totals.
+func TestUpdateVisRowsCache_FallsBackAboveCap(t *testing.T) {
+	origCap := maxLineRowsCacheLines
+	t.Cleanup(func() { maxLineRowsCacheLines = origCap })
+	maxLineRowsCacheLines = 4 // force fallback for any realistic buffer
+
+	buf := buffer.FromBytes([]byte(
+		"one\n" + "two two\n" + "three three three\n" +
+			"four four four four four\n" +
+			"five five five five five five five"))
+	m := fakeMeasurer()
+	const wrapWidth float32 = 40
+
+	// Build the cache-path answer by temporarily raising the cap
+	// above the buffer size and running updateVisRowsCache.
+	want := totalVisualRowsForBuffer(buf, m, wrapWidth, nil)
+
+	cfg := EditorCfg{
+		IDFocus:  700,
+		Buffer:   buf,
+		Width:    200,
+		Height:   100,
+		LineWrap: true,
+	}
+	st := editorState{Measurer: m}
+	st.ensureCursors()
+	frame := &editorFrameData{
+		wrapActive: true,
+		wrapWidth:  wrapWidth,
+	}
+	var remove func()
+	updateVisRowsCache(cfg, &st, frame, true, buf.LineCount(), &remove)
+	defer func() {
+		if remove != nil {
+			remove()
+		}
+	}()
+
+	if frame.lineRowsCache != nil {
+		t.Fatalf("fallback path should leave lineRowsCache nil, got len %d",
+			len(frame.lineRowsCache))
+	}
+	if frame.totalVisRows != want {
+		t.Errorf("fallback totalVisRows = %d, want %d",
+			frame.totalVisRows, want)
+	}
+}
+
+// TestApplyVisRowsDelta_BailsWhenFoldsActive verifies the delta
+// observer bails out to visRowsDirty when folds are present,
+// since fold-state drift between observers is not safely
+// representable in the delta.
+func TestApplyVisRowsDelta_BailsWhenFoldsActive(t *testing.T) {
+	m := fakeMeasurer()
+	const wrapWidth float32 = 80
+	buf := buffer.FromBytes([]byte("aaa\nbbb\nccc\nddd"))
+	frame := &editorFrameData{}
+	frame.state.Measurer = m
+	frame.state.FoldedRanges = []FoldRange{{StartLine: 1, EndLine: 2}}
+	frame.wrapWidth = wrapWidth
+	frame.totalVisRows, frame.lineRowsCache = buildLineRowsCache(
+		buf, m, wrapWidth, nil, nil)
+
+	// A fake Change touching line 0.
+	c := buffer.Change{
+		Applied: buffer.Edit{
+			Range: buffer.Range{
+				Start: buffer.Position{Line: 0, ByteCol: 0},
+				End:   buffer.Position{Line: 0, ByteCol: 0},
+			},
+		},
+		AppliedRange: buffer.Range{
+			Start: buffer.Position{Line: 0, ByteCol: 0},
+			End:   buffer.Position{Line: 0, ByteCol: 1},
+		},
+	}
+	applyVisRowsDelta(buf, frame, c)
+	if !frame.visRowsDirty {
+		t.Fatal("expected visRowsDirty=true when folds active")
+	}
+}
+
+// TestApplyVisRowsDelta_ZeroAllocAfterWarmup confirms the
+// observer's scratch reuse keeps steady-state single-line edits
+// allocation-free. Uses a non-wrapping line so
+// wrapLineVisualRowCount hits its fast path (no computeBreaks
+// allocation). Matches the AllocsPerRun shape used in the
+// highlighter hardening tests.
+func TestApplyVisRowsDelta_ZeroAllocAfterWarmup(t *testing.T) {
+	m := fakeMeasurer()
+	const wrapWidth float32 = 400 // wide enough that "hi" never wraps
+	buf := buffer.FromBytes([]byte("hi"))
+	frame := &editorFrameData{}
+	frame.state.Measurer = m
+	frame.wrapWidth = wrapWidth
+	frame.totalVisRows, frame.lineRowsCache = buildLineRowsCache(
+		buf, m, wrapWidth, nil, nil)
+
+	change := buffer.Change{
+		Applied: buffer.Edit{
+			Range: buffer.Range{
+				Start: buffer.Position{Line: 0, ByteCol: 1},
+				End:   buffer.Position{Line: 0, ByteCol: 1},
+			},
+		},
+		AppliedRange: buffer.Range{
+			Start: buffer.Position{Line: 0, ByteCol: 1},
+			End:   buffer.Position{Line: 0, ByteCol: 2},
+		},
+	}
+	// Warmup to size the scratch buffer.
+	applyVisRowsDelta(buf, frame, change)
+
+	n := testing.AllocsPerRun(50, func() {
+		applyVisRowsDelta(buf, frame, change)
+	})
+	if n != 0 {
+		t.Errorf("applyVisRowsDelta allocated %v times, want 0", n)
+	}
+}
+
 // TestVisRowsDelta_MatchesFullWalk feeds a random sequence of
 // edits through applyVisRowsDelta and compares the incrementally
 // maintained totalVisRows against totalVisualRowsForBuffer on the

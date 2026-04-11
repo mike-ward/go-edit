@@ -233,6 +233,56 @@ func TestInvalidateFolds(t *testing.T) {
 	}
 }
 
+func TestCheckFoldInvariant_DetectsBreaks(t *testing.T) {
+	cases := []struct {
+		name  string
+		folds []FoldRange
+		want  string // "" = valid
+	}{
+		{"empty", nil, ""},
+		{"single", []FoldRange{{StartLine: 0, EndLine: 3}}, ""},
+		{"valid multi",
+			[]FoldRange{
+				{StartLine: 0, EndLine: 2},
+				{StartLine: 5, EndLine: 7},
+				{StartLine: 10, EndLine: 10},
+			}, ""},
+		{"end < start",
+			[]FoldRange{{StartLine: 3, EndLine: 1}},
+			"end < start"},
+		{"unsorted",
+			[]FoldRange{
+				{StartLine: 5, EndLine: 6},
+				{StartLine: 2, EndLine: 4},
+			},
+			"unsorted StartLine"},
+		{"duplicate start",
+			[]FoldRange{
+				{StartLine: 0, EndLine: 2},
+				{StartLine: 0, EndLine: 2},
+			},
+			"unsorted StartLine"},
+		{"overlapping",
+			[]FoldRange{
+				{StartLine: 0, EndLine: 5},
+				{StartLine: 3, EndLine: 8},
+			},
+			"overlapping ranges"},
+		{"touching (overlap)",
+			[]FoldRange{
+				{StartLine: 0, EndLine: 5},
+				{StartLine: 5, EndLine: 8},
+			},
+			"overlapping ranges"},
+	}
+	for _, tt := range cases {
+		got := checkFoldInvariant(tt.folds)
+		if got != tt.want {
+			t.Errorf("%s: got %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
 // linearIsFolded is the pre-refactor reference implementation; used
 // as a differential oracle in TestFold_BinarySearchMatchesLinear.
 func linearIsFolded(folds []FoldRange, line int) bool {
@@ -282,6 +332,11 @@ func TestFold_BinarySearchMatchesLinear(t *testing.T) {
 		{{StartLine: 5, EndLine: 9}},
 		{{StartLine: 0, EndLine: 2}, {StartLine: 4, EndLine: 6}, {StartLine: 10, EndLine: 15}},
 		{{StartLine: 1, EndLine: 1}, {StartLine: 3, EndLine: 8}, {StartLine: 9, EndLine: 9}},
+	}
+	for _, folds := range cases {
+		if msg := checkFoldInvariant(folds); msg != "" {
+			t.Fatalf("bad fixture: %s: %+v", msg, folds)
+		}
 	}
 	for idx, folds := range cases {
 		for line := -1; line <= 20; line++ {

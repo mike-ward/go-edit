@@ -111,7 +111,30 @@ func foldAll(buf *buffer.Buffer, tabWidth int) []FoldRange {
 // foldRangeInvariant: callers of binary-search helpers below must
 // uphold "folds sorted by StartLine ascending, no overlapping
 // ranges." All mutators (toggleFold, foldAll, invalidateFolds,
-// unfoldAt) preserve it; sortFolds restores it.
+// unfoldAt) preserve it; sortFolds restores it. Tests assert it
+// via checkFoldInvariant after every mutation.
+
+// checkFoldInvariant reports the first invariant break in folds,
+// or "" when the slice is sorted and non-overlapping. Intended
+// for test assertions, not runtime checks — mutators are trusted.
+func checkFoldInvariant(folds []FoldRange) string {
+	for i := range folds {
+		f := folds[i]
+		if f.EndLine < f.StartLine {
+			return "end < start"
+		}
+		if i > 0 {
+			prev := folds[i-1]
+			if f.StartLine <= prev.StartLine {
+				return "unsorted StartLine"
+			}
+			if f.StartLine <= prev.EndLine {
+				return "overlapping ranges"
+			}
+		}
+	}
+	return ""
+}
 
 // sortFolds sorts fold ranges by StartLine.
 func sortFolds(folds []FoldRange) {

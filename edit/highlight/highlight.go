@@ -23,6 +23,13 @@ type Token struct {
 // maxInt is the "pristine" sentinel for dirtyLineStart.
 const maxInt = int(^uint(0) >> 1)
 
+// maxTokensPerLine caps the number of Token spans stored for a
+// single logical line. Beyond this, additional tokens from
+// chroma are dropped so pathological minified inputs can't grow
+// the per-line cache unboundedly. Visually, clipped tokens render
+// as default text — acceptable degradation under duress.
+const maxTokensPerLine = 4096
+
 // Highlighter is a DecorationProvider backed by chroma. It
 // tokenizes the buffer on demand, caches per-line tokens, and
 // re-tokenizes incrementally from the earliest dirty line on
@@ -36,6 +43,12 @@ type Highlighter struct {
 	// styled spans on logical line i (nil for untouched lines
 	// before the first tokenize).
 	tokens [][]Token
+	// lineContinues[i] is true iff line i ended while chroma
+	// was still inside a multi-line token (string/comment/etc).
+	// Populated by retokenizeFrom. Used by prevLineIsContinuation
+	// to back off the incremental restart point off to safe
+	// ground without guessing from token colors.
+	lineContinues []bool
 	// primed becomes true after the first successful retokenize;
 	// before that, dirtyLineStart is ignored and Decorate runs a
 	// full walk.
@@ -173,15 +186,11 @@ func (h *Highlighter) retokenize() {
 // retokenizeFrom incrementally re-lexes from line `from` to the
 // end of the buffer, preserving tokens[0..from-1] intact. Any
 // multi-line token that started before `from` forces a restart at
-// the nearest pristine line; if none, falls back to a full walk.
-//
-// chroma has no "restart from offset" API, so we feed the lexer
-// the buffer text starting at the line boundary. This discards
-// any in-flight multi-line construct that began earlier; a
-// correctness safeguard walks `from` back until the preceding
-// line's trailing token is neither a Comment* nor a String* — if
-// no such line exists, the prefix is dropped and the full buffer
-// is tokenized.
+// the nearest pristine line; the authoritative signal is
+// lineContinues[from-1], populated from chroma's token stream
+// the last time we tokenized that range. If every candidate
+// restart is still "inside" a multi-line construct, we fall all
+// the way back to 0 and full-walk.
 //
 // Must be called with h.mu held.
 func (h *Highlighter) retokenizeFrom(from int) {
@@ -190,29 +199,22 @@ func (h *Highlighter) retokenizeFrom(from int) {
 		from = 0
 	}
 	if from >= lc {
-		// Nothing to do; just resize the cache to match.
-		if len(h.tokens) > lc {
-			h.tokens = h.tokens[:lc]
-		} else if len(h.tokens) < lc {
-			h.tokens = append(h.tokens,
-				make([][]Token, lc-len(h.tokens))...)
-		}
+		// Nothing to do; just resize the caches to match.
+		h.tokens = resizeTokens(h.tokens, lc)
+		h.lineContinues = resizeBools(h.lineContinues, lc)
 		return
 	}
-	// Walk `from` backwards while the preceding line ends in a
-	// token that could span lines (string or comment). Classic
-	// incremental-lexer restart heuristic.
+	// Walk `from` backwards past any line still inside a
+	// multi-line token. lineContinues[i] is authoritative if the
+	// cache is primed for that line, which it is whenever i is
+	// before our current restart point.
 	for from > 0 && h.prevLineIsContinuation(from) {
 		from--
 	}
 
 	var prefixBytes int
-	if from == 0 {
-		prefixBytes = 0
-	} else {
-		for i := range from {
-			prefixBytes += len(h.buf.Line(i)) + 1 // +1 for '\n'
-		}
+	for i := range from {
+		prefixBytes += len(h.buf.Line(i)) + 1 // +1 for '\n'
 	}
 	fullBytes := h.buf.Bytes()
 	tailText := string(fullBytes[prefixBytes:])
@@ -222,25 +224,36 @@ func (h *Highlighter) retokenizeFrom(from int) {
 		// Fall back to clearing the suffix; draw path handles
 		// nil slices as "no decorations."
 		h.tokens = resizeTokens(h.tokens, lc)
+		h.lineContinues = resizeBools(h.lineContinues, lc)
 		for i := from; i < lc; i++ {
 			h.tokens[i] = nil
+			h.lineContinues[i] = false
 		}
 		return
 	}
 
 	// Prepare cache slots from `from` onward.
 	h.tokens = resizeTokens(h.tokens, lc)
+	h.lineContinues = resizeBools(h.lineContinues, lc)
 	for i := from; i < lc; i++ {
-		h.tokens[i] = h.tokens[i][:0]
+		h.tokens[i] = nil
+		h.lineContinues[i] = false
 	}
 
 	line := from
 	col := 0
 	for tok := iter(); tok.Type != chroma.EOFType; tok = iter() {
 		fg, bold, italic := h.resolveToken(tok.Type)
+		multi := isMultilineTokenType(tok.Type)
 		parts := strings.Split(tok.Value, "\n")
 		for pi, part := range parts {
 			if pi > 0 {
+				// Line boundary crossed inside `tok`. The
+				// line we just left ended inside the token,
+				// so mark it as a continuation.
+				if multi && line < lc {
+					h.lineContinues[line] = true
+				}
 				line++
 				col = 0
 			}
@@ -248,7 +261,8 @@ func (h *Highlighter) retokenizeFrom(from int) {
 				break
 			}
 			end := col + len(part)
-			if len(part) > 0 {
+			if len(part) > 0 &&
+				len(h.tokens[line]) < maxTokensPerLine {
 				h.tokens[line] = append(h.tokens[line], Token{
 					Start:  col,
 					End:    end,
@@ -265,28 +279,43 @@ func (h *Highlighter) retokenizeFrom(from int) {
 	}
 }
 
+// isMultilineTokenType reports whether tt is a chroma token type
+// that can legitimately span line boundaries — strings, comments,
+// and their sub-categories. A boundary crossed inside such a
+// token forces the incremental restart to back up past the
+// affected lines.
+func isMultilineTokenType(tt chroma.TokenType) bool {
+	return tt.InCategory(chroma.Comment) ||
+		tt.InCategory(chroma.String) ||
+		tt.InCategory(chroma.LiteralString)
+}
+
 // prevLineIsContinuation reports whether the line at index from-1
-// ended inside a multi-line construct (comment or string). Used
-// by retokenizeFrom to back the restart point off to safe ground.
-// Must be called with h.mu held and 0 < from <= len(h.tokens).
+// ended inside a multi-line token. Reads the lineContinues cache
+// populated by retokenizeFrom.
+//
+// Must be called with h.mu held.
 func (h *Highlighter) prevLineIsContinuation(from int) bool {
-	if from <= 0 || from-1 >= len(h.tokens) {
+	if from <= 0 || from-1 >= len(h.lineContinues) {
 		return false
 	}
-	line := h.tokens[from-1]
-	if len(line) == 0 {
-		return false
+	return h.lineContinues[from-1]
+}
+
+// resizeBools grows or shrinks b to length lc, preserving
+// existing entries where possible. Extra entries are false.
+func resizeBools(b []bool, lc int) []bool {
+	if cap(b) >= lc {
+		grown := b[:lc]
+		// Zero any previously-used slots beyond the old length.
+		for i := len(b); i < lc; i++ {
+			grown[i] = false
+		}
+		return grown
 	}
-	last := line[len(line)-1]
-	// The cache doesn't carry the TokenType, only the resolved
-	// (fg, bold, italic) triple. As a proxy, treat a line whose
-	// last span reaches exactly to the end of the line AND has
-	// a non-zero Fg as "possibly still inside a run" — cheap
-	// over-approximation. Safe: over-walking wastes work but
-	// never produces wrong tokens. A tighter signal would
-	// require storing chroma.TokenType per span.
-	lineBytes := h.buf.Line(from - 1)
-	return last.End == len(lineBytes) && last.Fg != 0
+	grown := make([]bool, lc)
+	copy(grown, b)
+	return grown
 }
 
 // resizeTokens grows or shrinks tokens to length lc, preserving

@@ -3,6 +3,7 @@ package edit
 import (
 	"maps"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -207,13 +208,27 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 	}
 }
 
+// floatBitsStable returns a hash-stable uint64 representation of
+// f. NaN has many bit patterns and +0/-0 compare equal but have
+// different bits; canonicalize both so the draw-version fold
+// doesn't thrash on upstream guard failures.
+func floatBitsStable(f float32) uint64 {
+	if f != f { // NaN
+		return 0x7fc00000 // canonical quiet NaN
+	}
+	if f == 0 { // merges +0 and -0
+		return 0
+	}
+	return uint64(math.Float32bits(f))
+}
+
 // computeDrawVersion folds every frame-visible input into a single
 // uint64. go-gui's DrawCanvas cache is keyed by (ID, Version,
 // TessWidth, TessHeight); when the fold matches the prior frame
 // OnDraw is skipped and the cached tessellation is re-used.
 //
 // Inputs are hashed via FNV-1a. Float fields are converted through
-// math.Float32bits so equal values fold identically. Cursor blink
+// floatBitsStable so NaN and ±0 fold identically. Cursor blink
 // is deliberately NOT mixed in — when blink lands it must route
 // through a separate overlay layer, not invalidate this cache.
 func computeDrawVersion(
@@ -230,24 +245,41 @@ func computeDrawVersion(
 	if cfg.Buffer != nil {
 		v = fold(v, cfg.Buffer.Version())
 	}
-	v = fold(v, uint64(math.Float32bits(st.ScrollY)))
-	v = fold(v, uint64(math.Float32bits(st.ScrollX)))
+	v = fold(v, floatBitsStable(st.ScrollY))
+	v = fold(v, floatBitsStable(st.ScrollX))
 	v = fold(v, cursorFoldHash(st.Cursors))
 	v = fold(v, uint64(len(st.FoldedRanges))<<32|
 		uint64(len(st.Cursors)))
-	// Fold search state: active + query length + flags.
-	var searchMix uint64
+	// Fold search state. The find bar is drawn inside the main
+	// editor canvas (not a separate overlay), so every visually
+	// observable field of searchState must flow into the hash or
+	// the DrawCanvas cache will replay stale pixels when only
+	// find-bar state changed.
+	var searchFlags uint64
 	if st.Search.Active {
-		searchMix |= 1
+		searchFlags |= 1
 	}
-	searchMix |= uint64(len(st.Search.Query)) << 8
 	if st.Search.CaseSensitive {
-		searchMix |= 1 << 24
+		searchFlags |= 1 << 1
 	}
 	if st.Search.IsRegex {
-		searchMix |= 1 << 25
+		searchFlags |= 1 << 2
 	}
-	v = fold(v, searchMix)
+	if st.Search.InSelection {
+		searchFlags |= 1 << 3
+	}
+	if st.Search.ShowReplace {
+		searchFlags |= 1 << 4
+	}
+	if st.Search.FocusReplace {
+		searchFlags |= 1 << 5
+	}
+	v = fold(v, searchFlags)
+	v = fold(v, uint64(len(st.Search.Query)))
+	v = fold(v, uint64(len(st.Search.ReplaceText)))
+	v = fold(v, uint64(st.Search.FieldCursor))
+	v = fold(v, uint64(st.Search.CurrentMatch))
+	v = fold(v, uint64(len(st.Search.Matches)))
 	// Toggle flags + help state.
 	var toggles uint64
 	toggles |= uint64(st.WhitespaceOverride) & 0xff
@@ -263,8 +295,8 @@ func computeDrawVersion(
 		toggles |= 1 << 26
 	}
 	v = fold(v, toggles)
-	v = fold(v, uint64(math.Float32bits(frame.wrapWidth)))
-	v = fold(v, uint64(math.Float32bits(st.HelpScrollY)))
+	v = fold(v, floatBitsStable(frame.wrapWidth))
+	v = fold(v, floatBitsStable(st.HelpScrollY))
 	v = fold(v, uint64(frame.totalVisRows))
 	// Ensure a zero fold result never collides with the initial
 	// "never drawn" state (shape.Version starts at 0).
@@ -299,6 +331,14 @@ func applyTabWidth(cfg EditorCfg, m *text.Measurer) {
 	}
 }
 
+// maxLineRowsCacheLines caps the persistent per-line cache size.
+// Above this count (≈ 8 MiB of ints at 1M lines), updateVisRowsCache
+// falls back to a per-frame full walk so adversarial all-newline
+// inputs don't produce a 256 MiB int slice. Exposed as a var so
+// tests can lower the cap and exercise the fallback without
+// constructing a 1M-line buffer.
+var maxLineRowsCacheLines = 1 << 20 // 1M lines → ~8 MiB cache
+
 // updateVisRowsCache installs or removes the vis-rows delta
 // observer and recomputes totalVisRows when the cache is stale.
 // When wrap is active, the observer patches lineRowsCache and
@@ -330,11 +370,22 @@ func updateVisRowsCache(
 	if !stale {
 		return
 	}
-	if wrapActive && st.Measurer != nil {
+	// Hardening: an all-newline 32 MiB buffer has ~32M lines;
+	// the lineRowsCache allocation would be ~256 MiB. Fall back
+	// to the full-walk (no persistent cache) path when line
+	// count exceeds maxLineRowsCacheLines — the full walk is
+	// O(lines) per frame but avoids the big slice.
+	if wrapActive && st.Measurer != nil &&
+		total <= maxLineRowsCacheLines {
 		frame.totalVisRows, frame.lineRowsCache =
 			buildLineRowsCache(cfg.Buffer, st.Measurer,
 				frame.wrapWidth, st.FoldedRanges,
 				frame.lineRowsCache)
+	} else if wrapActive && st.Measurer != nil {
+		frame.lineRowsCache = nil
+		frame.totalVisRows = totalVisualRowsForBuffer(
+			cfg.Buffer, st.Measurer,
+			frame.wrapWidth, st.FoldedRanges)
 	} else {
 		frame.lineRowsCache = nil
 		if cfg.EnableFolding && len(st.FoldedRanges) > 0 {
@@ -428,29 +479,30 @@ func applyVisRowsDelta(
 		oldSum += frame.lineRowsCache[i]
 	}
 
-	// Compute new per-line rows. Re-use existing capacity by
-	// splicing into a single scratch slice.
+	// Compute new per-line rows into the frame-scoped scratch
+	// slice. Reusing across edits keeps steady-state typing
+	// allocation-free on the observer path.
 	newCount := endLineNew - startLine + 1
 	oldCount := endLineOld - startLine + 1
+	scratch := frame.visRowsDeltaScratch[:0]
+	if cap(scratch) < newCount {
+		scratch = make([]int, 0, newCount)
+	}
 	newSum := 0
-	newEntries := make([]int, newCount)
 	for i := range newCount {
 		line := startLine + i
 		rows := wrapLineVisualRowCount(buf.Line(line), m, ww)
-		newEntries[i] = rows
+		scratch = append(scratch, rows)
 		newSum += rows
 	}
+	frame.visRowsDeltaScratch = scratch
 
-	// Splice newEntries in place of the old range.
+	// Splice scratch in place of the old range.
 	if newCount == oldCount {
-		copy(frame.lineRowsCache[startLine:], newEntries)
+		copy(frame.lineRowsCache[startLine:], scratch)
 	} else {
-		tail := frame.lineRowsCache[endLineOld+1:]
-		spliced := make([]int, 0, startLine+newCount+len(tail))
-		spliced = append(spliced, frame.lineRowsCache[:startLine]...)
-		spliced = append(spliced, newEntries...)
-		spliced = append(spliced, tail...)
-		frame.lineRowsCache = spliced
+		frame.lineRowsCache = slices.Replace(
+			frame.lineRowsCache, startLine, endLineOld+1, scratch...)
 	}
 	frame.totalVisRows += newSum - oldSum
 	frame.visRowsCacheLines = len(frame.lineRowsCache)
