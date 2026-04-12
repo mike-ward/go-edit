@@ -35,7 +35,7 @@ type EditorCfg struct {
 	Scrollbar        ScrollbarMode
 	LangConfigs      map[string]LangConfig // keyed by ".ext" or filename
 	Theme            EditorTheme
-	Decorations      []buffer.DecorationProvider
+	Decorations      []DecorationProvider
 	Keymaps          []*Keymap         // pushed on top of DefaultKeymap
 	Actions          map[string]Action // additional/override actions
 	// OnInvalidate is called once with a RequestRedraw thunk.

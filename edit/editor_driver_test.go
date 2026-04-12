@@ -924,3 +924,52 @@ func TestDriver_MultiCursorCut(t *testing.T) {
 		t.Errorf("after undo: %q", buf.String())
 	}
 }
+
+// TestDriver_MultiCursorFilterVetoPartialApply verifies that when
+// an EditFilter rejects one cursor's edit, the other cursors'
+// edits still apply and undo reverts them atomically.
+func TestDriver_MultiCursorFilterVetoPartialApply(t *testing.T) {
+	buf := buffer.FromBytes([]byte("aaa\nbbb\nccc"))
+	buf.EnableUndo(nil)
+	d := newDriver(EditorCfg{
+		IDFocus: 99, Buffer: buf, Width: 400, Height: 200,
+	})
+	d.tick()
+
+	// Filter rejects edits on line 1.
+	removeFilter := buf.AddFilter(
+		func(_ *buffer.Buffer, e *buffer.Edit) buffer.FilterResult {
+			if e.Range.Start.Line == 1 {
+				return buffer.FilterReject
+			}
+			return buffer.FilterAccept
+		})
+	defer removeFilter()
+
+	// Place cursors at start of each line.
+	st := d.state()
+	st.Cursors = []CursorState{
+		{Cursor: buffer.Position{Line: 0, ByteCol: 0},
+			Anchor: buffer.Position{Line: 0, ByteCol: 0}},
+		{Cursor: buffer.Position{Line: 1, ByteCol: 0},
+			Anchor: buffer.Position{Line: 1, ByteCol: 0}},
+		{Cursor: buffer.Position{Line: 2, ByteCol: 0},
+			Anchor: buffer.Position{Line: 2, ByteCol: 0}},
+	}
+	storeState(d.w, d.cfg.IDFocus, st)
+
+	// Type 'X' — should insert on lines 0 and 2, rejected on 1.
+	d.sendChar('X')
+	got := buf.String()
+	want := "Xaaa\nbbb\nXccc"
+	if got != want {
+		t.Errorf("buffer=%q want %q", got, want)
+	}
+
+	// Undo should revert both applied inserts.
+	d.sendKeyMod(gui.KeyZ, gui.ModCtrl)
+	got = buf.String()
+	if got != "aaa\nbbb\nccc" {
+		t.Errorf("after undo: %q want aaa\\nbbb\\nccc", got)
+	}
+}

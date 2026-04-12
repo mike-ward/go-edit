@@ -504,3 +504,53 @@ func startScrollbarDrag(
 		},
 	})
 }
+
+func editorOnMouseScroll(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.Event, *gui.Window) {
+	return func(layout *gui.Layout, e *gui.Event, w *gui.Window) {
+		dy := e.ScrollY
+		dx := e.ScrollX
+		// Shift+vertical scroll → horizontal scroll.
+		if e.Modifiers.Has(gui.ModShift) && dy != 0 && dx == 0 {
+			dx, dy = dy, 0
+		}
+		// Guard NaN/Inf.
+		if dy != dy || dy > 1e6 || dy < -1e6 {
+			dy = 0
+		}
+		if dx != dx || dx > 1e6 || dx < -1e6 {
+			dx = 0
+		}
+		if dy == 0 && dx == 0 {
+			return
+		}
+		st := loadState(w, cfg.IDFocus)
+		if st.HelpActive {
+			if dy != 0 {
+				st.HelpScrollY -= dy * frame.lineHeight * 3
+				clampHelpScroll(&st, frame.helpEntries,
+					frame.lineHeight, cfg.Height)
+			}
+			storeState(w, cfg.IDFocus, st)
+			e.IsHandled = true
+			return
+		}
+		lh := frame.lineHeight
+		if dy != 0 {
+			st.ScrollY -= dy * lh * 3
+			clampScroll(&st, cfg, frame, lh)
+		}
+		if dx != 0 && !frame.wrapActive {
+			// padLeft = advance/2 so advance = padLeft*2.
+			adv := frame.padLeft * 2
+			if adv <= 0 {
+				adv = 8
+			}
+			st.ScrollX += dx * adv * 3
+			textAreaW := cfg.Width - frame.gutterW - frame.padLeft
+			maxScrollX := max(frame.maxContentW-textAreaW, 0)
+			clampScrollX(&st, maxScrollX)
+		}
+		storeState(w, cfg.IDFocus, st)
+		e.IsHandled = true
+	}
+}

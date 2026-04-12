@@ -5,9 +5,10 @@ package buffer
 const MaxMarks = 1 << 20 // ~1M marks
 
 // MarkSet holds all marks for a buffer. Marks are stored in a flat
-// slice and adjusted in O(n) per edit. For typical mark counts
-// (<10k) this is fast enough; optimize to per-line buckets if
-// benchmarks show pressure.
+// slice and adjusted in O(n) per Apply call where n = len(marks).
+// Designed for < 1K marks (cursors, bracket pairs, search hits).
+// For higher counts (LSP diagnostics, git blame), consider batching
+// or replacing with an interval tree. See ROADMAP "Future (post-1.0)".
 type MarkSet struct {
 	nextID uint32
 	marks  []*Mark

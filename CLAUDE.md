@@ -31,7 +31,16 @@ Tests run fully headless. `examples/basic` is the only CGO-linked target.
    - `AmendLayout(layout, w)` (which does have `*Window`) loads persistent state from `StateMap`, builds the `text.Measurer` lazily, populates the frame struct.
    - `OnDraw(dc)` reads the closed-over frame struct. No window access needed.
    - Input callbacks (`OnKeyDown`, `OnChar`, `OnMouseScroll`) receive `*Window` per event and read/write `StateMap` directly.
-3. **Editor owns its own `ScrollY`**, not go-gui's `Column(IDScroll)` mechanism. DrawCanvas is sized to the viewport; scroll state lives in `editorState.ScrollY`; mouse wheel via `OnMouseScroll`; keys adjust via `ensureCursorVisible`.
+3. **Closure-based state isolation is a deliberate tradeoff.** go-gui's
+   callback model (`OnDraw`, `AmendLayout`, `OnKeyDown`) passes function
+   values, not interface implementations. The editor captures
+   `*editorFrameData` in closures returned by `Editor(cfg)`. Benefits:
+   state isolation (multiple editors per window), no globals. Costs:
+   harder to test subsystems in isolation, no "go to definition" on
+   closure fields, third-party extension requires understanding the
+   closure chain. If go-gui ever supports interface-based widgets,
+   migrating would improve extensibility.
+4. **Editor owns its own `ScrollY`**, not go-gui's `Column(IDScroll)` mechanism. DrawCanvas is sized to the viewport; scroll state lives in `editorState.ScrollY`; mouse wheel via `OnMouseScroll`; keys adjust via `ensureCursorVisible`.
 
 ### Package layout
 

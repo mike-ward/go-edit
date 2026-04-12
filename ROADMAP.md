@@ -523,6 +523,15 @@ has absorbed real consumer pressure.
 - Minimap. Dropped from Phase 10; gated on user demand. Sticky
   scroll + search highlight-all + folds cover the use cases.
   Reconsider if multiple users ask.
+- Tessellation cost audit. The editor bypasses go-gui's DrawCanvas
+  cache (`ID: ""` on overlay, version-hash on main canvas). Measure
+  actual tessellation cost for large visible regions (high-DPI, small
+  font, 10K+ visible lines). If significant, push partial-invalidation
+  or dirty-rect support upstream to go-gui.
+- MarkSet scaling. Current O(n)-per-edit flat slice is adequate for
+  < 1K marks. If LSP diagnostics or git-blame push counts higher,
+  swap to interval tree or sorted-slice with binary-search adjustment
+  window.
 
 ## Open questions
 

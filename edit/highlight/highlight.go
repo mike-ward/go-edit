@@ -59,6 +59,9 @@ type Highlighter struct {
 	// splices new tokens into the cache, preserving the pristine
 	// prefix.
 	dirtyLineStart int
+	// lastViewport caches the most recent Decorate viewport so
+	// retokenizeFrom can cap work to viewport + lookahead.
+	lastViewport   buffer.Viewport
 	invalidate     func() // RequestRedraw thunk; may be nil
 	removeEdit     func() // remove handle for OnEdit observer
 	overrideColors map[chroma.TokenType]uint32
@@ -140,13 +143,14 @@ func (h *Highlighter) Decorate(
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	h.lastViewport = vp
+
 	if !h.primed {
 		h.retokenize()
 		h.primed = true
 		h.dirtyLineStart = maxInt
 	} else if h.dirtyLineStart < maxInt {
 		h.retokenizeFrom(h.dirtyLineStart)
-		h.dirtyLineStart = maxInt
 	}
 
 	// Clamp viewport to valid range.
@@ -183,14 +187,60 @@ func (h *Highlighter) retokenize() {
 	h.retokenizeFrom(0)
 }
 
-// retokenizeFrom incrementally re-lexes from line `from` to the
-// end of the buffer, preserving tokens[0..from-1] intact. Any
+// retokenizeLookahead is the number of lines beyond the viewport
+// that retokenizeFrom processes before stopping. This caps the work
+// for edits near the top of large files to O(viewport + lookahead)
+// instead of O(file). The remaining dirty suffix is processed on
+// subsequent Decorate calls as the user scrolls.
+const retokenizeLookahead = 200
+
+// buildTailText returns the buffer text from line `from` to
+// `stopLine` (exclusive) as a string for chroma to tokenize.
+// Uses Len() to avoid a full Bytes() allocation for the length
+// check when stopLine < lc.
+func (h *Highlighter) buildTailText(from, stopLine, lc int) string {
+	var prefixBytes int
+	for i := range from {
+		prefixBytes += len(h.buf.Line(i)) + 1 // +1 for '\n'
+	}
+	var tailEnd int
+	if stopLine >= lc {
+		tailEnd = h.buf.Len()
+	} else {
+		tailEnd = prefixBytes
+		for i := from; i < stopLine; i++ {
+			tailEnd += len(h.buf.Line(i)) + 1
+		}
+		// Trim trailing '\n' if we stopped before EOF to avoid
+		// an extra empty-line artifact.
+		if tailEnd > 0 {
+			tailEnd--
+		}
+	}
+	fullBytes := h.buf.Bytes()
+	if tailEnd > len(fullBytes) {
+		tailEnd = len(fullBytes)
+	}
+	if prefixBytes > tailEnd {
+		prefixBytes = tailEnd
+	}
+	return string(fullBytes[prefixBytes:tailEnd])
+}
+
+// retokenizeFrom incrementally re-lexes from line `from` toward
+// the end of the buffer, preserving tokens[0..from-1] intact. Any
 // multi-line token that started before `from` forces a restart at
 // the nearest pristine line; the authoritative signal is
 // lineContinues[from-1], populated from chroma's token stream
 // the last time we tokenized that range. If every candidate
 // restart is still "inside" a multi-line construct, we fall all
 // the way back to 0 and full-walk.
+//
+// When the primed cache exists, retokenization is capped at
+// lastViewport.LastLine + retokenizeLookahead. Lines beyond the
+// cap keep their existing cached tokens; dirtyLineStart is set
+// to the cap so the next Decorate call resumes where this one
+// stopped.
 //
 // Must be called with h.mu held.
 func (h *Highlighter) retokenizeFrom(from int) {
@@ -212,30 +262,42 @@ func (h *Highlighter) retokenizeFrom(from int) {
 		from--
 	}
 
-	var prefixBytes int
-	for i := range from {
-		prefixBytes += len(h.buf.Line(i)) + 1 // +1 for '\n'
+	// Compute the stop line: viewport + lookahead. When primed,
+	// cap the text passed to chroma so edits near the top of
+	// large files don't re-lex the entire buffer.
+	stopLine := lc // default: full buffer
+	if h.primed && h.lastViewport.LastLine > 0 {
+		sl := h.lastViewport.LastLine + retokenizeLookahead + 1
+		if sl < lc {
+			stopLine = sl
+		}
 	}
-	fullBytes := h.buf.Bytes()
-	tailText := string(fullBytes[prefixBytes:])
+	// Ensure stopLine is at least past `from`.
+	if stopLine <= from {
+		stopLine = lc
+	}
+
+	tailText := h.buildTailText(from, stopLine, lc)
 
 	iter, err := h.lexer.Tokenise(nil, tailText)
 	if err != nil {
-		// Fall back to clearing the suffix; draw path handles
-		// nil slices as "no decorations."
+		// Fall back to clearing the processed range; draw path
+		// handles nil slices as "no decorations."
 		h.tokens = resizeTokens(h.tokens, lc)
 		h.lineContinues = resizeBools(h.lineContinues, lc)
-		for i := from; i < lc; i++ {
+		for i := from; i < stopLine; i++ {
 			h.tokens[i] = nil
 			h.lineContinues[i] = false
 		}
 		return
 	}
 
-	// Prepare cache slots from `from` onward.
+	// Prepare cache slots from `from` to `stopLine`. Lines beyond
+	// stopLine keep their existing cached tokens so previously
+	// highlighted off-screen text doesn't flash to default coloring.
 	h.tokens = resizeTokens(h.tokens, lc)
 	h.lineContinues = resizeBools(h.lineContinues, lc)
-	for i := from; i < lc; i++ {
+	for i := from; i < stopLine; i++ {
 		h.tokens[i] = nil
 		h.lineContinues[i] = false
 	}
@@ -257,7 +319,7 @@ func (h *Highlighter) retokenizeFrom(from int) {
 				line++
 				col = 0
 			}
-			if line >= lc {
+			if line >= lc || line >= stopLine {
 				break
 			}
 			end := col + len(part)
@@ -273,9 +335,22 @@ func (h *Highlighter) retokenizeFrom(from int) {
 			}
 			col = end
 		}
-		if line >= lc {
+		if line >= lc || line >= stopLine {
 			break
 		}
+	}
+
+	// If we capped the input before EOF, mark the remainder as
+	// still dirty so the next Decorate call continues.
+	if stopLine < lc {
+		// The last processed line may have ended in a
+		// continuation. If so, the next Decorate pass must
+		// restart from at least that line.
+		if stopLine < h.dirtyLineStart || h.dirtyLineStart == maxInt {
+			h.dirtyLineStart = stopLine
+		}
+	} else {
+		h.dirtyLineStart = maxInt
 	}
 }
 
