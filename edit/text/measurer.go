@@ -85,13 +85,25 @@ func (m *Measurer) InvalidateCache() {
 func (m *Measurer) layoutCached(
 	lineBytes []byte,
 ) (glyph.Layout, bool) {
-	s := string(lineBytes)
-	if m.cacheOK && m.cacheKey == s {
-		return m.cacheLay, true
+	// Compare bytes directly to avoid string allocation on
+	// cache hits. unsafe.String is not needed; the compiler
+	// optimizes the comparison when the string is short-lived.
+	if m.cacheOK && len(m.cacheKey) == len(lineBytes) {
+		hit := true
+		for i := range lineBytes {
+			if m.cacheKey[i] != lineBytes[i] {
+				hit = false
+				break
+			}
+		}
+		if hit {
+			return m.cacheLay, true
+		}
 	}
 	if m.tm == nil {
 		return glyph.Layout{}, false
 	}
+	s := string(lineBytes)
 	layout, err := m.tm.LayoutText(s, m.style, 0)
 	if err != nil {
 		return glyph.Layout{}, false
@@ -102,7 +114,9 @@ func (m *Measurer) layoutCached(
 	return layout, true
 }
 
-// Advance returns the cached width of a single monospace glyph.
+// Advance returns the cached width of "M". Use as a fallback
+// estimate only — prefer TextWidth or layout queries for
+// pixel-accurate measurements.
 func (m *Measurer) Advance() float32 { return m.advance }
 
 // LineHeight returns the cached line height.
@@ -111,11 +125,31 @@ func (m *Measurer) LineHeight() float32 { return m.lineHeight }
 // Style returns the text style this measurer was built with.
 func (m *Measurer) Style() gui.TextStyle { return m.style }
 
+// TextWidth returns the pixel width of s in the Measurer's style.
+func (m *Measurer) TextWidth(s string) float32 {
+	if m == nil || m.tm == nil {
+		return 0
+	}
+	return m.tm.TextWidth(s, m.style)
+}
+
+// SpaceWidth returns the pixel width of a space character. Falls
+// back to Advance when no TextMeasurer is available.
+func (m *Measurer) SpaceWidth() float32 {
+	if m == nil {
+		return 0
+	}
+	if m.tm == nil {
+		return m.advance
+	}
+	return m.tm.TextWidth(" ", m.style)
+}
+
 // XForColumn returns the x-offset of the cursor at byteCol within
-// lineBytes. ASCII-only lines use the monospace fast path (with
-// tab-stop expansion); any non-ASCII byte anywhere in the line
-// forces the go-glyph layout path so all positions on the same
-// line use consistent metrics.
+// lineBytes. Uses go-glyph layout for pixel-accurate positioning
+// with any font (proportional or monospace). Falls back to
+// column-count * advance only when no layout is available
+// (headless tests).
 func (m *Measurer) XForColumn(lineBytes []byte, byteCol int) float32 {
 	if m == nil || byteCol <= 0 {
 		return 0
@@ -123,43 +157,41 @@ func (m *Measurer) XForColumn(lineBytes []byte, byteCol int) float32 {
 	if byteCol > len(lineBytes) {
 		byteCol = len(lineBytes)
 	}
-	if IsASCII(lineBytes) {
-		vcols := VisualCols(lineBytes, byteCol, m.tabWidth())
-		return float32(vcols) * m.advance
-	}
 	layout, ok := m.layoutCached(lineBytes)
-	if !ok {
-		vcols := VisualCols(lineBytes, byteCol, m.tabWidth())
-		return float32(vcols) * m.advance
+	if ok {
+		cp, cpOK := layout.GetCursorPos(byteCol)
+		if cpOK {
+			return cp.X
+		}
 	}
-	cp, cpOK := layout.GetCursorPos(byteCol)
-	if !cpOK {
-		vcols := VisualCols(lineBytes, byteCol, m.tabWidth())
-		return float32(vcols) * m.advance
-	}
-	return cp.X
+	// Fallback (headless): column-count * advance.
+	vcols := VisualCols(lineBytes, byteCol, m.tabWidth())
+	return float32(vcols) * m.advance
 }
 
-// ColumnForX returns the byte column closest to x within lineBytes.
-// Returns the clamped column; never -1.
+// ColumnForX returns the byte column closest to x within
+// lineBytes. Uses go-glyph hit-test for pixel-accurate mapping
+// with any font. Falls back to advance-based rounding when no
+// layout is available.
 func (m *Measurer) ColumnForX(lineBytes []byte, x float32) int {
 	if m == nil || x != x || x <= 0 { // x != x traps NaN
 		return 0
 	}
-	if IsASCII(lineBytes) {
-		tw := m.tabWidth()
-		targetVCol := int((x + m.advance/2) / m.advance)
-		return byteColForVisualCol(lineBytes, targetVCol, tw)
-	}
 	layout, ok := m.layoutCached(lineBytes)
-	if !ok {
-		return clampASCIICol(lineBytes, x, m.advance)
+	if ok {
+		idx := layout.HitTest(x, m.lineHeight/2)
+		if idx < 0 {
+			return len(lineBytes)
+		}
+		return idx
 	}
-	idx := layout.HitTest(x, m.lineHeight/2)
-	if idx < 0 {
-		return len(lineBytes)
+	// Fallback (headless): advance-based with tab awareness.
+	if m.advance <= 0 {
+		return 0
 	}
-	return idx
+	tw := m.tabWidth()
+	targetVCol := int((x + m.advance/2) / m.advance)
+	return byteColForVisualCol(lineBytes, targetVCol, tw)
 }
 
 // LayoutLine returns the go-glyph layout for lineBytes. Exposed for
@@ -174,38 +206,32 @@ func (m *Measurer) LayoutLine(lineBytes []byte) (glyph.Layout, error) {
 }
 
 // CharWidth returns the pixel width of the character at byteCol.
-// For ASCII lines returns the monospace advance; for non-ASCII
-// queries go-glyph's Layout for the actual glyph width.
+// Uses go-glyph layout; falls back to advance when unavailable.
 func (m *Measurer) CharWidth(lineBytes []byte, byteCol int) float32 {
 	if m == nil {
 		return 0
 	}
-	if IsASCII(lineBytes) {
+	if byteCol < 0 || byteCol >= len(lineBytes) {
 		return m.advance
 	}
 	layout, ok := m.layoutCached(lineBytes)
-	if !ok {
-		return m.advance
+	if ok {
+		if cr, crOK := layout.GetCharRect(byteCol); crOK {
+			return cr.Width
+		}
 	}
-	cr, crOK := layout.GetCharRect(byteCol)
-	if !crOK {
-		return m.advance
-	}
-	return cr.Width
+	return m.advance
 }
 
 // NextCursorPos returns the byte offset of the next valid cursor
-// position after byteCol on the given line. For ASCII lines this
-// is byteCol+1; for non-ASCII lines go-glyph's Layout determines
-// grapheme-cluster boundaries via Pango/Harfbuzz.
+// position after byteCol. Uses go-glyph layout for grapheme-
+// cluster boundaries; falls back to rune advance when layout is
+// unavailable (headless tests).
 func (m *Measurer) NextCursorPos(
 	lineBytes []byte, byteCol int,
 ) int {
 	if m == nil || byteCol >= len(lineBytes) {
 		return len(lineBytes)
-	}
-	if IsASCII(lineBytes) {
-		return byteCol + 1
 	}
 	layout, ok := m.layoutCached(lineBytes)
 	if ok && len(layout.LogAttrs) > 0 {
@@ -220,16 +246,12 @@ func (m *Measurer) NextCursorPos(
 }
 
 // PrevCursorPos returns the byte offset of the previous valid
-// cursor position before byteCol on the given line. Mirrors
-// NextCursorPos in the opposite direction.
+// cursor position before byteCol. Mirrors NextCursorPos.
 func (m *Measurer) PrevCursorPos(
 	lineBytes []byte, byteCol int,
 ) int {
 	if m == nil || byteCol <= 0 {
 		return 0
-	}
-	if IsASCII(lineBytes) {
-		return byteCol - 1
 	}
 	layout, ok := m.layoutCached(lineBytes)
 	if ok && len(layout.LogAttrs) > 0 {

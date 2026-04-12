@@ -492,8 +492,9 @@ func TestDriver_ClickSetsCursor(t *testing.T) {
 	d := newDriver(EditorCfg{
 		IDFocus: 27, Buffer: buf, Width: 400, Height: 200,
 	})
-	// Click at x=24 (3 chars * 8px advance) on line 0.
-	d.sendClick(24, 0, 0)
+	// Click inside char at index 3 (padLeft=4, so mx=25).
+	// HitTest(25, ...) lands inside char 3 (X=24..32).
+	d.sendClick(29, 0, 0)
 	s := d.cursor()
 	if s.Cursor.ByteCol != 3 {
 		t.Errorf("cursor=%+v want col 3", s.Cursor)

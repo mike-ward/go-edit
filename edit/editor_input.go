@@ -156,7 +156,13 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		if cfg.ShowLineNumbers {
 			digits := len(strconv.Itoa(cfg.Buffer.LineCount()))
 			digits = max(digits, 3)
-			gutterW = float32(digits)*advance + 2*advance
+			var sb [12]byte // stack buffer; covers up to 12 digits
+			n := min(digits, len(sb))
+			for i := range n {
+				sb[i] = '0'
+			}
+			gutterW = st.Measurer.TextWidth(string(sb[:n])) +
+				2*advance
 		}
 
 		// Clamp cursors against current buffer size — the buffer
@@ -217,41 +223,7 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 			frame.helpEntries = gatherHelp(hs)
 		}
 
-		// Execute action queued via TriggerAction (e.g. native menu).
-		if st.PendingAction != "" {
-			actionID := st.PendingAction
-			st.PendingAction = ""
-			resetBlink(cfg, &st)
-			// cfg.Actions override defaultActions, matching editorOnKeyDown.
-			action, ok := cfg.Actions[actionID]
-			if !ok {
-				action, ok = defaultActions[actionID]
-			}
-			if ok && (!cfg.ReadOnly || !isEditAction(actionID)) {
-				isEdit := isEditAction(actionID)
-				if isEdit && actionID != "edit.undo" &&
-					actionID != "edit.redo" {
-					cfg.Buffer.SetUndoCursorState(
-						buildUndoCursorState(&st))
-				}
-				if action.PerCursor && len(st.Cursors) > 1 {
-					dispatchPerCursor(cfg, &st, cfg.Buffer, w,
-						action, isEdit)
-				} else {
-					action.Execute(cfg, &st, cfg.Buffer, w)
-					applyPostAction(&st, action)
-				}
-				sortAndMerge(&st)
-				// Snap cursors out of any fold the action landed in.
-				if cfg.EnableFolding && len(st.FoldedRanges) > 0 {
-					for i := range st.Cursors {
-						snapCursorOutOfFold(&st.Cursors[i],
-							st.FoldedRanges)
-					}
-				}
-				ensureCursorVisible(&st, frame, cfg)
-			}
-		}
+		executePendingAction(cfg, &st, frame, w)
 
 		computeBlink(cfg, &st, frame, w)
 
@@ -261,66 +233,9 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		frame.padLeft = advance / 2
 		frame.valid = true
 
-		// Capture canvas origin every frame so IMESetRect works
-		// even before the first mouse click.
-		if len(layout.Children) > 0 &&
-			layout.Children[0].Shape != nil {
-			s := layout.Children[0].Shape
-			if s.X == s.X { // not NaN
-				frame.canvasOriginX = s.X
-			}
-			if s.Y == s.Y {
-				frame.canvasOriginY = s.Y
-			}
-		}
-
-		// Read IME composition state from the window. Events
-		// dispatch before AmendLayout, so w.IMEComposing()
-		// already reflects the current frame's composition.
-		frame.imeComposing = w.IMEComposing()
-		if frame.imeComposing {
-			frame.imePreedit = w.IMECompText()
-			frame.imeCursor = w.IMECompCursor()
-			frame.imeSelLen = w.IMECompSelLen()
-		} else {
-			frame.imePreedit = ""
-			frame.imeCursor = 0
-			frame.imeSelLen = 0
-		}
-
-		// Position the OS candidate window near the primary
-		// cursor so the user can see completions.
-		if frame.imeComposing && len(st.Cursors) > 0 {
-			cs := st.Cursors[0]
-			lb := cfg.Buffer.Line(cs.Cursor.Line)
-			cx := gutterW + advance/2 +
-				st.Measurer.XForColumn(lb, cs.Cursor.ByteCol) -
-				st.ScrollX
-			var visRow int
-			hasFolds := cfg.EnableFolding &&
-				len(st.FoldedRanges) > 0
-			if wrapActive && st.Measurer != nil {
-				visRow = globalLogicalToVisualRow(
-					cfg.Buffer, st.Measurer,
-					frame.wrapWidth, st.FoldedRanges,
-					cs.Cursor.Line)
-				brk := computeBreaks(lb,
-					st.Measurer, frame.wrapWidth)
-				we := wrapEntry{BreakCols: brk}
-				visRow += wrapCursorVisualRow(&we,
-					cs.Cursor.ByteCol)
-			} else if hasFolds {
-				visRow = logicalToVisible(
-					cs.Cursor.Line, st.FoldedRanges)
-			} else {
-				visRow = cs.Cursor.Line
-			}
-			cy := float32(visRow)*lh - st.ScrollY
-			w.IMESetRect(
-				frame.canvasOriginX+cx,
-				frame.canvasOriginY+cy,
-				1, lh)
-		}
+		updateCanvasOrigin(layout, frame)
+		updateIMEState(cfg, &st, frame, w, gutterW,
+			advance, lh, wrapActive)
 
 		// Compute the draw cache version after all frame state is
 		// populated, then write it into the DrawCanvas shape.
@@ -352,6 +267,113 @@ func floatBitsStable(f float32) uint64 {
 }
 
 // computeDrawVersion folds every frame-visible input into a single
+// executePendingAction runs an action queued via TriggerAction
+// (e.g. native menu). Called once per AmendLayout pass.
+func executePendingAction(
+	cfg EditorCfg, st *editorState, frame *editorFrameData,
+	w *gui.Window,
+) {
+	if st.PendingAction == "" {
+		return
+	}
+	actionID := st.PendingAction
+	st.PendingAction = ""
+	resetBlink(cfg, st)
+	action, ok := cfg.Actions[actionID]
+	if !ok {
+		action, ok = defaultActions[actionID]
+	}
+	if !ok || (cfg.ReadOnly && isEditAction(actionID)) {
+		return
+	}
+	isEdit := isEditAction(actionID)
+	if isEdit && actionID != "edit.undo" &&
+		actionID != "edit.redo" {
+		cfg.Buffer.SetUndoCursorState(
+			buildUndoCursorState(st))
+	}
+	if action.PerCursor && len(st.Cursors) > 1 {
+		dispatchPerCursor(cfg, st, cfg.Buffer, w,
+			action, isEdit)
+	} else {
+		action.Execute(cfg, st, cfg.Buffer, w)
+		applyPostAction(st, action)
+	}
+	sortAndMerge(st)
+	if cfg.EnableFolding && len(st.FoldedRanges) > 0 {
+		for i := range st.Cursors {
+			snapCursorOutOfFold(&st.Cursors[i],
+				st.FoldedRanges)
+		}
+	}
+	ensureCursorVisible(st, frame, cfg)
+}
+
+// updateCanvasOrigin captures the canvas position from the layout
+// tree every frame so IMESetRect works before the first click.
+func updateCanvasOrigin(layout *gui.Layout, frame *editorFrameData) {
+	if len(layout.Children) > 0 &&
+		layout.Children[0].Shape != nil {
+		s := layout.Children[0].Shape
+		if s.X == s.X { // not NaN
+			frame.canvasOriginX = s.X
+		}
+		if s.Y == s.Y {
+			frame.canvasOriginY = s.Y
+		}
+	}
+}
+
+// updateIMEState reads IME composition state from the window and
+// positions the OS candidate window near the primary cursor.
+func updateIMEState(
+	cfg EditorCfg, st *editorState, frame *editorFrameData,
+	w *gui.Window, gutterW, advance, lh float32,
+	wrapActive bool,
+) {
+	frame.imeComposing = w.IMEComposing()
+	if frame.imeComposing {
+		frame.imePreedit = w.IMECompText()
+		frame.imeCursor = w.IMECompCursor()
+		frame.imeSelLen = w.IMECompSelLen()
+	} else {
+		frame.imePreedit = ""
+		frame.imeCursor = 0
+		frame.imeSelLen = 0
+	}
+	if !frame.imeComposing || len(st.Cursors) == 0 {
+		return
+	}
+	cs := st.Cursors[0]
+	lb := cfg.Buffer.Line(cs.Cursor.Line)
+	cx := gutterW + advance/2 +
+		st.Measurer.XForColumn(lb, cs.Cursor.ByteCol) -
+		st.ScrollX
+	var visRow int
+	hasFolds := cfg.EnableFolding && len(st.FoldedRanges) > 0
+	if wrapActive && st.Measurer != nil {
+		visRow = globalLogicalToVisualRow(
+			cfg.Buffer, st.Measurer,
+			frame.wrapWidth, st.FoldedRanges,
+			cs.Cursor.Line)
+		brk := computeBreaks(lb,
+			st.Measurer, frame.wrapWidth)
+		we := wrapEntry{BreakCols: brk}
+		visRow += wrapCursorVisualRow(&we,
+			cs.Cursor.ByteCol)
+	} else if hasFolds {
+		visRow = logicalToVisible(
+			cs.Cursor.Line, st.FoldedRanges)
+	} else {
+		visRow = cs.Cursor.Line
+	}
+	cy := float32(visRow)*lh - st.ScrollY
+	w.IMESetRect(
+		frame.canvasOriginX+cx,
+		frame.canvasOriginY+cy,
+		1, lh)
+}
+
 // uint64. go-gui's DrawCanvas cache is keyed by (ID, Version,
 // TessWidth, TessHeight); when the fold matches the prior frame
 // OnDraw is skipped and the cached tessellation is re-used.

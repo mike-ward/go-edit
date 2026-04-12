@@ -195,6 +195,51 @@ func TestTextLeftClip_InfClipLeft(t *testing.T) {
 	}
 }
 
+func TestTextLeftClip_NaNClipLeft(t *testing.T) {
+	// NaN clipLeft → need is NaN → guard renders full string.
+	dc := newTestDC()
+	nan := float32(math.NaN())
+	textLeftClip(dc, 0, 0, "hello", gui.TextStyle{}, nan, 8)
+	ts := textsIn(dc)
+	if len(ts) != 1 {
+		t.Fatalf("NaN clipLeft: want 1 entry, got %d", len(ts))
+	}
+	if ts[0].Text != "hello" {
+		t.Errorf("text=%q want %q", ts[0].Text, "hello")
+	}
+}
+
+func TestTextLeftClip_NaNX(t *testing.T) {
+	// NaN x → need is NaN → guard renders full string.
+	dc := newTestDC()
+	nan := float32(math.NaN())
+	textLeftClip(dc, nan, 0, "hello", gui.TextStyle{}, 50, 8)
+	ts := textsIn(dc)
+	if len(ts) != 1 {
+		t.Fatalf("NaN x: want 1 entry, got %d", len(ts))
+	}
+}
+
+func TestTextLeftClip_NeedNonPositive(t *testing.T) {
+	// clipLeft < x → need < 0 → guard renders full string.
+	dc := newTestDC()
+	textLeftClip(dc, 100, 0, "hello", gui.TextStyle{}, 50, 8)
+	ts := textsIn(dc)
+	if len(ts) != 1 {
+		t.Fatalf("negative need: want 1 entry, got %d", len(ts))
+	}
+	if ts[0].X != 100 {
+		t.Errorf("x=%v want 100", ts[0].X)
+	}
+}
+
+func TestTextLeftClip_HugeNeedCapsEstimate(t *testing.T) {
+	// Enormous need should not overflow int or loop forever.
+	dc := newTestDC()
+	textLeftClip(dc, -1e20, 0, "hello", gui.TextStyle{}, 0, 8)
+	// Entire string skipped or rendered — just no panic.
+}
+
 // --- drawWhitespace clipLeft behaviour ---
 
 func TestDrawWhitespace_ClipLeft_SkipsCharsInGutter(t *testing.T) {

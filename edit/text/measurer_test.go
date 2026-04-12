@@ -31,6 +31,87 @@ func TestColumnForX_NaN(t *testing.T) {
 	}
 }
 
+func TestTextWidth_NilReceiver(t *testing.T) {
+	var m *Measurer
+	if got := m.TextWidth("hello"); got != 0 {
+		t.Errorf("TextWidth on nil=%v want 0", got)
+	}
+}
+
+func TestTextWidth_NilTm(t *testing.T) {
+	m := &Measurer{advance: 8}
+	if got := m.TextWidth("hello"); got != 0 {
+		t.Errorf("TextWidth with nil tm=%v want 0", got)
+	}
+}
+
+func TestSpaceWidth_NilReceiver(t *testing.T) {
+	var m *Measurer
+	if got := m.SpaceWidth(); got != 0 {
+		t.Errorf("SpaceWidth on nil=%v want 0", got)
+	}
+}
+
+func TestSpaceWidth_NilTmFallsBackToAdvance(t *testing.T) {
+	m := &Measurer{advance: 10}
+	if got := m.SpaceWidth(); got != 10 {
+		t.Errorf("SpaceWidth with nil tm=%v want 10", got)
+	}
+}
+
+func TestCharWidth_NegativeByteCol(t *testing.T) {
+	m := &Measurer{advance: 8}
+	if got := m.CharWidth([]byte("abc"), -1); got != 8 {
+		t.Errorf("CharWidth(-1)=%v want 8 (advance)", got)
+	}
+}
+
+func TestCharWidth_OOBByteCol(t *testing.T) {
+	m := &Measurer{advance: 8}
+	if got := m.CharWidth([]byte("abc"), 5); got != 8 {
+		t.Errorf("CharWidth(5)=%v want 8 (advance)", got)
+	}
+}
+
+func TestCharWidth_EmptyLine(t *testing.T) {
+	m := &Measurer{advance: 8}
+	if got := m.CharWidth(nil, 0); got != 8 {
+		t.Errorf("CharWidth(nil,0)=%v want 8", got)
+	}
+}
+
+func TestColumnForX_ZeroAdvanceFallback(t *testing.T) {
+	m := &Measurer{advance: 0, lineHeight: 16}
+	if got := m.ColumnForX([]byte("abc"), 10); got != 0 {
+		t.Errorf("ColumnForX with zero advance=%d want 0", got)
+	}
+}
+
+func TestLayoutCached_CacheHit(t *testing.T) {
+	m := &Measurer{advance: 8}
+	// No tm → always returns false; verify no panic.
+	_, ok := m.layoutCached([]byte("hello"))
+	if ok {
+		t.Error("expected false with nil tm")
+	}
+	// Nil lineBytes.
+	_, ok = m.layoutCached(nil)
+	if ok {
+		t.Error("expected false for nil lineBytes")
+	}
+}
+
+func TestXForColumn_LayoutFallsBackOnBadIndex(t *testing.T) {
+	// No tm → fallback path. byteCol beyond line end → clamped.
+	m := &Measurer{advance: 8, lineHeight: 16}
+	line := []byte("ab")
+	got := m.XForColumn(line, 10)
+	// Clamped to len(line)=2, fallback: 2*8=16.
+	if got != 16 {
+		t.Errorf("XForColumn(10)=%v want 16", got)
+	}
+}
+
 func TestIsASCII(t *testing.T) {
 	cases := []struct {
 		in   string

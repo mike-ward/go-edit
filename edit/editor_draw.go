@@ -360,7 +360,7 @@ func drawGutter(
 		return
 	}
 	num := strconv.Itoa(line + 1)
-	nw := float32(len(num)) * frame.state.Measurer.Advance()
+	nw := dc.TextWidth(num, gutterStyle)
 	dc.Text(frame.gutterW-nw-frame.padLeft, y, num, gutterStyle)
 }
 
@@ -646,7 +646,7 @@ func drawStickyScroll(
 		// Gutter number.
 		if cfg.ShowLineNumbers {
 			num := strconv.Itoa(line + 1)
-			nw := float32(len(num)) * m.Advance()
+			nw := dc.TextWidth(num, gutterStyle)
 			dc.Text(frame.gutterW-nw-frame.padLeft,
 				y, num, gutterStyle)
 		}
@@ -761,9 +761,10 @@ func renderStyledLine(
 }
 
 // textLeftClip calls dc.Text but skips leading characters that
-// fall left of clipLeft. For ASCII strings the monospace advance
-// gives exact skip counts. For non-ASCII strings (CJK, etc.)
-// it measures cumulative width to find the correct skip point.
+// fall left of clipLeft. Uses advance to estimate a skip count,
+// then refines with dc.TextWidth so proportional fonts are
+// handled correctly. Falls back to pure advance-based skip when
+// no text measurer is available (headless tests).
 func textLeftClip(dc *gui.DrawContext, x, y float32, s string, style gui.TextStyle, clipLeft, advance float32) {
 	if len(s) == 0 {
 		return
@@ -773,56 +774,47 @@ func textLeftClip(dc *gui.DrawContext, x, y float32, s string, style gui.TextSty
 		return
 	}
 	need := clipLeft - x
-
-	// Check for non-ASCII content.
-	nonASCII := false
-	for i := range len(s) {
-		if s[i] >= utf8.RuneSelf {
-			nonASCII = true
-			break
-		}
-	}
-
-	if !nonASCII {
-		// ASCII fast path: exact skip.
-		skip := int(math.Ceil(float64(need) / float64(advance)))
-		if skip >= len(s) {
-			return
-		}
-		dc.Text(x+float32(skip)*advance, y, s[skip:], style)
+	// Guard NaN/Inf from upstream float math.
+	if need != need || need <= 0 { // NaN or non-positive
+		dc.Text(x, y, s, style)
 		return
 	}
 
-	// Non-ASCII: skip runes by measured width. If no text
-	// measurer is available (headless), fall back to
-	// rune-count * advance as a rough estimate.
-	probe := dc.TextWidth("M", style)
-	if probe == 0 {
-		skip := int(math.Ceil(float64(need) / float64(advance)))
-		i, n := 0, 0
-		for n < skip && i < len(s) {
-			_, sz := utf8.DecodeRuneInString(s[i:])
-			i += sz
-			n++
-		}
-		if i >= len(s) {
-			return
-		}
-		dc.Text(x+float32(n)*advance, y, s[i:], style)
-		return
-	}
-	i := 0
-	for i < len(s) {
+	// Estimate skip count from advance, then skip that many
+	// runes. Cap estimate to len(s) to avoid overflow.
+	est := min(max(int(math.Ceil(float64(need)/float64(advance))), 0), len(s))
+	i, n := 0, 0
+	for n < est && i < len(s) {
 		_, sz := utf8.DecodeRuneInString(s[i:])
 		i += sz
-		if dc.TextWidth(s[:i], style) >= need {
-			break
+		n++
+	}
+
+	// Refine: measure the skipped prefix. If the estimate
+	// overshot (proportional font, wide chars), back up. If
+	// it undershot, advance. Single TextWidth call per
+	// refinement step.
+	skippedW := dc.TextWidth(s[:i], style)
+	if skippedW > 0 {
+		// Over-skipped: back up rune by rune.
+		for i > 0 && skippedW > need {
+			_, sz := utf8.DecodeLastRuneInString(s[:i])
+			i -= sz
+			skippedW = dc.TextWidth(s[:i], style)
 		}
+		// Under-skipped: advance past the boundary.
+		for i < len(s) && skippedW < need {
+			_, sz := utf8.DecodeRuneInString(s[i:])
+			i += sz
+			skippedW = dc.TextWidth(s[:i], style)
+		}
+	} else {
+		// No measurer (headless): advance-based estimate.
+		skippedW = float32(n) * advance
 	}
 	if i >= len(s) {
 		return
 	}
-	skippedW := dc.TextWidth(s[:i], style)
 	dc.Text(x+skippedW, y, s[i:], style)
 }
 
@@ -878,7 +870,7 @@ func drawSelectionBg(
 	var ex float32
 	if lineIdx < sel.End.Line {
 		// Line continues into next; extend one advance past EOL.
-		ex = textX + m.XForColumn(lineBytes, lineLen) + m.Advance()
+		ex = textX + m.XForColumn(lineBytes, lineLen) + m.SpaceWidth()
 	} else {
 		ex = textX + m.XForColumn(lineBytes, endCol)
 	}
@@ -963,7 +955,7 @@ func drawFindBar(
 	} else {
 		toggles += " Sel "
 	}
-	toggleW := float32(len(toggles)) * adv
+	toggleW := dc.TextWidth(toggles, dimStyle)
 	fieldW := inputW - toggleW - adv
 	if fieldW < adv {
 		fieldW = adv
@@ -981,7 +973,7 @@ func drawFindBar(
 
 	// Match count.
 	countStr := matchCountStr(ss)
-	countW := float32(len(countStr)) * adv
+	countW := dc.TextWidth(countStr, dimStyle)
 	countX := inputX + fieldW - countW - pad
 	dc.Text(countX, toggleY, countStr, dimStyle)
 
