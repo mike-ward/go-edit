@@ -3,6 +3,7 @@ package edit
 import (
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/mike-ward/go-edit/edit/buffer"
 	"github.com/mike-ward/go-gui/gui"
@@ -41,6 +42,47 @@ type EditorCfg struct {
 	// Decoration providers that do background work should store
 	// the thunk and call it when new data is ready.
 	OnInvalidate func(func())
+
+	// CursorBlinkPeriod is the half-period of the cursor blink
+	// cycle (visible for one period, hidden for one period).
+	// Zero uses the default (500 ms). Negative disables blink.
+	CursorBlinkPeriod time.Duration
+
+	// Now is an injectable clock used by the blink cycle. Nil
+	// defaults to time.Now. Tests pass a fake clock to make blink
+	// state deterministic.
+	Now func() time.Time
+}
+
+// defaultBlinkPeriod is the cursor blink half-period used when
+// EditorCfg.CursorBlinkPeriod is zero.
+const defaultBlinkPeriod = 500 * time.Millisecond
+
+// minBlinkPeriod is the smallest blink half-period accepted.
+// Anything smaller would fire the redraw timer in a tight loop.
+const minBlinkPeriod = 50 * time.Millisecond
+
+// blinkPeriod resolves the configured blink period. Zero →
+// default; negative → 0 (disabled); too-small positive →
+// clamped to minBlinkPeriod.
+func blinkPeriod(cfg EditorCfg) time.Duration {
+	if cfg.CursorBlinkPeriod == 0 {
+		return defaultBlinkPeriod
+	}
+	if cfg.CursorBlinkPeriod < 0 {
+		return 0
+	}
+	return max(cfg.CursorBlinkPeriod, minBlinkPeriod)
+}
+
+// nowOf returns the current time using cfg.Now if set, else
+// time.Now. Returns time.Time directly to avoid a closure
+// allocation on the hot path.
+func nowOf(cfg EditorCfg) time.Time {
+	if cfg.Now != nil {
+		return cfg.Now()
+	}
+	return time.Now()
 }
 
 // editorMonoStyle returns the TextStyle used for all editor text
@@ -108,6 +150,33 @@ func Editor(cfg EditorCfg) gui.View {
 		OnMouseScroll:   editorOnMouseScroll(cfg, frame),
 	})
 
+	// Cursor overlay: a separate DrawCanvas with empty ID
+	// (cache-bypass) so its contents re-tessellate every frame.
+	// Wrapped in a floating Column anchored to the editor root's
+	// top-left so it sits exactly over the main canvas. The main
+	// canvas keeps its tessellation cache untouched across blink
+	// transitions, while this tiny overlay (a few rects) repaints
+	// freely. The wrapper has IDFocus=0 and no event handlers so
+	// mouse clicks fall through to the main canvas underneath.
+	cursorCanvas := gui.DrawCanvas(gui.DrawCanvasCfg{
+		ID:     "",
+		Width:  cfg.Width,
+		Height: cfg.Height,
+		Clip:   true,
+		OnDraw: editorOnDrawCursor(cfg, frame),
+	})
+	cursorOverlay := gui.Column(gui.ContainerCfg{
+		Width:       cfg.Width,
+		Height:      cfg.Height,
+		Sizing:      gui.FixedFixed,
+		Padding:     cfg.Padding,
+		SizeBorder:  cfg.SizeBorder,
+		Float:       true,
+		FloatAnchor: gui.FloatTopLeft,
+		FloatTieOff: gui.FloatTopLeft,
+		Content:     []gui.View{cursorCanvas},
+	})
+
 	return gui.Column(gui.ContainerCfg{
 		IDFocus:     cfg.IDFocus,
 		Width:       cfg.Width,
@@ -122,7 +191,7 @@ func Editor(cfg EditorCfg) gui.View {
 		OnKeyDown:   editorOnKeyDown(cfg, frame),
 		OnChar:      editorOnChar(cfg, frame),
 		AmendLayout: editorAmendLayout(cfg, frame),
-		Content:     []gui.View{canvas},
+		Content:     []gui.View{canvas, cursorOverlay},
 	})
 }
 

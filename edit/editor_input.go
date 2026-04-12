@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 	"unsafe"
@@ -14,6 +15,66 @@ import (
 	"github.com/mike-ward/go-edit/edit/text"
 	"github.com/mike-ward/go-gui/gui"
 )
+
+// resetBlink stamps the current time onto editorState as
+// "user activity just happened", restarting the blink cycle so the
+// cursor is solid for one full visible half-period before flicking
+// off again. No-op when blink is disabled, so callers can sprinkle
+// it freely on every input path.
+func resetBlink(cfg EditorCfg, st *editorState) {
+	if blinkPeriod(cfg) <= 0 {
+		return
+	}
+	st.LastActivityUnixNano = nowOf(cfg).UnixNano()
+}
+
+// computeBlink derives frame.cursorVisible from cfg / state and
+// schedules the next redraw at the next blink transition. Real-time
+// scheduling via time.AfterFunc only fires when cfg.Now is nil
+// (production); injecting a fake clock implies the test drives
+// AmendLayout manually and does not want background timer firings.
+func computeBlink(
+	cfg EditorCfg, st *editorState, frame *editorFrameData,
+	w *gui.Window,
+) {
+	period := blinkPeriod(cfg)
+	// Seed activity timestamp on first frame so blink starts
+	// immediately without waiting for a keystroke.
+	if period > 0 && st.LastActivityUnixNano == 0 {
+		st.LastActivityUnixNano = nowOf(cfg).UnixNano()
+	}
+	if period <= 0 {
+		frame.cursorVisible = true
+		if frame.blinkTimer != nil {
+			frame.blinkTimer.Stop()
+			frame.blinkTimer = nil
+		}
+		return
+	}
+	half := period.Nanoseconds()
+	dt := max(nowOf(cfg).UnixNano()-st.LastActivityUnixNano, 0)
+	frame.cursorVisible = (dt/half)%2 == 0
+	if cfg.Now != nil || w == nil {
+		// Test mode: don't schedule background redraws.
+		return
+	}
+	nextIn := max(period-time.Duration(dt%half), minBlinkPeriod)
+	if frame.blinkTimer != nil {
+		frame.blinkTimer.Stop()
+	}
+	// QueueCommand + UpdateWindow (not RequestRedraw) for two
+	// reasons: (1) QueueCommand calls wakeMain() to post an OS
+	// event that wakes the sleeping backend event loop — plain
+	// RequestRedraw only sets a flag; (2) UpdateWindow triggers
+	// a full layout rebuild so AmendLayout fires and
+	// computeBlink recalculates cursorVisible — render-only
+	// refreshes skip AmendLayout entirely.
+	frame.blinkTimer = time.AfterFunc(nextIn, func() {
+		w.QueueCommand(func(w *gui.Window) {
+			w.UpdateWindow()
+		})
+	})
+}
 
 // isEditAction reports whether an action ID is a mutating action
 // that should be blocked in read-only mode.
@@ -156,6 +217,7 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		if st.PendingAction != "" {
 			actionID := st.PendingAction
 			st.PendingAction = ""
+			resetBlink(cfg, &st)
 			// cfg.Actions override defaultActions, matching editorOnKeyDown.
 			action, ok := cfg.Actions[actionID]
 			if !ok {
@@ -186,6 +248,8 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 				ensureCursorVisible(&st, frame, cfg)
 			}
 		}
+
+		computeBlink(cfg, &st, frame, w)
 
 		frame.state = st
 		frame.lineHeight = lh
@@ -566,6 +630,7 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 			if st.HelpActive {
 				handleHelpKey(&st, e, frame.lineHeight,
 					cfg.Height, frame.helpEntries)
+				resetBlink(cfg, &st)
 				storeState(w, cfg.IDFocus, st)
 				e.IsHandled = true
 				return
@@ -573,6 +638,7 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 			if st.Search.Active {
 				if handleSearchKey(cfg, &st, cfg.Buffer, e) {
 					ensureCursorVisible(&st, frame, cfg)
+					resetBlink(cfg, &st)
 					storeState(w, cfg.IDFocus, st)
 					e.IsHandled = true
 					return
@@ -595,6 +661,7 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 		}
 
 		st := loadState(w, cfg.IDFocus)
+		resetBlink(cfg, &st)
 
 		// Record cursor before edit for undo (skip for undo/redo
 		// themselves — they restore cursor from their own records).
@@ -653,6 +720,7 @@ func editorOnChar(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.
 			}
 			if st.Search.Active {
 				handleSearchChar(&st, cfg.Buffer, r)
+				resetBlink(cfg, &st)
 				storeState(w, cfg.IDFocus, st)
 				e.IsHandled = true
 				return
@@ -666,6 +734,7 @@ func editorOnChar(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.
 		n := utf8.EncodeRune(buf2[:], r)
 
 		st := loadState(w, cfg.IDFocus)
+		resetBlink(cfg, &st)
 
 		// Auto-close: skip over existing closer instead of
 		// inserting a duplicate. Check each cursor individually.

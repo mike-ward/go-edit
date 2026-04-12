@@ -111,6 +111,7 @@ func editorOnClick(
 			return
 		}
 		st := loadState(w, cfg.IDFocus)
+		resetBlink(cfg, &st)
 
 		// Capture canvas origin for MouseLock drag coord
 		// translation. Guard NaN from layout.
@@ -265,6 +266,7 @@ func startDrag(cfg EditorCfg, frame *editorFrameData, w *gui.Window) {
 	// store cycle. scrollY < 0 means use the stored value.
 	dragUpdate := func(lx, ly, scrollY float32, w *gui.Window) {
 		st := loadState(w, cfg.IDFocus)
+		resetBlink(cfg, &st)
 		if scrollY >= 0 {
 			st.ScrollY = scrollY
 		}

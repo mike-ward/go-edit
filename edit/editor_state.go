@@ -1,6 +1,8 @@
 package edit
 
 import (
+	"time"
+
 	"github.com/mike-ward/go-edit/edit/buffer"
 	"github.com/mike-ward/go-edit/edit/text"
 	"github.com/mike-ward/go-gui/gui"
@@ -41,6 +43,12 @@ type editorState struct {
 	// Help screen overlay.
 	HelpActive  bool
 	HelpScrollY float32
+
+	// LastActivityUnixNano is the wall-clock time of the most
+	// recent user activity (key, char, click, programmatic move).
+	// Drives the cursor blink cycle. 0 means "no activity recorded
+	// yet" — cursor stays solid.
+	LastActivityUnixNano int64
 
 	// PendingAction holds an action ID to execute on the next
 	// AmendLayout pass. Set via TriggerAction; cleared after use.
@@ -144,6 +152,16 @@ type editorFrameData struct {
 	// version, scroll, cursors, folds, toggles, wrap width, etc.).
 	// go-gui skips OnDraw when this matches the prior frame.
 	drawVersion uint64
+
+	// cursorVisible drives the blinking cursor overlay. Computed
+	// in editorAmendLayout from cfg.CursorBlinkPeriod and
+	// editorState.LastActivityUnixNano. Read by editorOnDrawCursor.
+	cursorVisible bool
+
+	// blinkTimer fires w.RequestRedraw at the next blink
+	// transition. Stopped+rescheduled each AmendLayout. Nil when
+	// blink is disabled or running under an injected fake clock.
+	blinkTimer *time.Timer
 }
 
 func loadState(w *gui.Window, id uint32) editorState {

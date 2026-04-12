@@ -445,9 +445,19 @@ Architectural notes:
 Small, unblocked items that close out the 1.0 story. Order is the
 recommended sequence.
 
-- [ ] Cursor blink animation. Injectable ticker on `editorState`
-      (reuse fake-clock pattern from undo coalesce). Resolves open
-      question on blink home.
+- [x] Cursor blink animation. `EditorCfg.CursorBlinkPeriod` (half-
+      period; 0 disables) and `EditorCfg.Now` (injectable clock).
+      `editorState.LastActivityUnixNano` records last user activity;
+      `resetBlink` is called from key/char/click/drag handlers.
+      `frame.cursorVisible` derived in `computeBlink` each amend pass.
+      Drawn by a separate `gui.DrawCanvas` overlay in a floating
+      `gui.Column` (parent-anchored, top-left) with `ID: ""` so
+      blink-rate version churn stays out of the main viewport's
+      tessellation cache. `time.AfterFunc` wakes the window at the
+      next blink transition (skipped under injected clock so tests
+      don't see background firings). Sticky-scroll-occluded cursors
+      are skipped in `drawCursors`. Find-bar cursor and window-blur
+      pause are deferred.
 - [x] Large-file strategy: hard cap. `MaxLoadBytes=32 MiB` stays;
       document the limit in package docs and surface a clear error
       on overflow. go-edit positions as a code editor, not a log
