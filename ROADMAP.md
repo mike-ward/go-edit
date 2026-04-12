@@ -453,7 +453,8 @@ recommended sequence.
       Drawn by a separate `gui.DrawCanvas` overlay in a floating
       `gui.Column` (parent-anchored, top-left) with `ID: ""` so
       blink-rate version churn stays out of the main viewport's
-      tessellation cache. `time.AfterFunc` wakes the window at the
+      tessellation cache (measured: 0.6 us vs 1.2 ms — 2000x;
+      see tessellation audit below). `time.AfterFunc` wakes the window at the
       next blink transition (skipped under injected clock so tests
       don't see background firings). Sticky-scroll-occluded cursors
       are skipped in `drawCursors`. Find-bar cursor and window-blur
@@ -478,6 +479,32 @@ recommended sequence.
       dispatch in go-gui `imeCompositionHandler` to replace window-
       state polling with per-shape callbacks. Defer until second
       consumer appears.
+- [x] Tessellation cost audit. Benchmarks in `edit/tess_bench_test.go`.
+      Results (Apple M5, arm64, `fakewin` measurer):
+
+      | Scenario          | Time    | Allocs | Tris | Texts |
+      |-------------------|---------|--------|------|-------|
+      | Full draw 100 row | 1.2 ms  | 29k    | 44   | 1,256 |
+      | + overlays        | 1.4 ms  | 34k    | 182  | 1,887 |
+      | Cursor only       | 0.6 us  | 3      | 2    | 0     |
+      | 10k FilledRects   | 0.24 ms | 22     | —    | —     |
+
+      Scaling: 25 rows 0.28 ms → 50 rows 0.53 ms → 100 rows
+      1.2 ms → 200 rows 5.1 ms (super-linear; 3.4x allocs for
+      2x rows).
+
+      Conclusions that inform future design:
+      (a) Triangle geometry is trivially cheap — 44 tris regardless
+          of viewport size. Partial invalidation / dirty rects not
+          needed; cost is text entries and allocations.
+      (b) Cursor overlay validated at ~2000x cheaper than full draw.
+          Blink separation design is correct.
+      (c) `computeDrawVersion` hash is justified — saves 1.2 ms +
+          29k allocs per cache hit.
+      (d) Super-linear scaling at 200 rows is the real optimization
+          target. Likely in highlighter `Decorate`, decoration
+          sorting, or `renderStyledLine` per-span allocation.
+      (e) No upstream go-gui push needed for rendering perf.
 - [ ] Soft-wrap cursor column math. Audit desired-column tracking
       across wrapped rows — Up/Down across a wrapped line resets
       to logical col. Resolves open question.
@@ -523,11 +550,16 @@ has absorbed real consumer pressure.
 - Minimap. Dropped from Phase 10; gated on user demand. Sticky
   scroll + search highlight-all + folds cover the use cases.
   Reconsider if multiple users ask.
-- Tessellation cost audit. The editor bypasses go-gui's DrawCanvas
-  cache (`ID: ""` on overlay, version-hash on main canvas). Measure
-  actual tessellation cost for large visible regions (high-DPI, small
-  font, 10K+ visible lines). If significant, push partial-invalidation
-  or dirty-rect support upstream to go-gui.
+- ~~Tessellation cost audit.~~ Done (Phase 9). Triangle geometry
+  is trivially cheap (44 tris at any viewport size). Partial-
+  invalidation / dirty-rect upstream push **not needed**. Cost is
+  allocation-dominated — see next item.
+- Draw-path allocation reduction. `editorOnDraw` at 100 visible
+  rows: ~1.2 ms, 29k allocs, 2.6 MB/frame. At 200 rows: ~5.1 ms,
+  123k allocs (super-linear — 3.4x allocs for 2x rows). Likely
+  hotspots: highlighter `Decorate`, decoration sorting, `dc.Text`
+  string copies, `renderStyledLine` per-span allocation. Bench-
+  gated; no action until profiling identifies the dominant path.
 - MarkSet scaling. Current O(n)-per-edit flat slice is adequate for
   < 1K marks. If LSP diagnostics or git-blame push counts higher,
   swap to interval tree or sorted-slice with binary-search adjustment
