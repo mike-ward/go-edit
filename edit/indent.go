@@ -10,30 +10,29 @@ import (
 // allocations from a corrupt IndentStyle.
 const maxIndentWidth = 16
 
+// clampIndentWidth returns a sane indent width from style,
+// defaulting to 4 and capping at maxIndentWidth.
+func clampIndentWidth(w int) int {
+	if w <= 0 {
+		return 4
+	}
+	return min(w, maxIndentWidth)
+}
+
 // indentUnit returns the bytes for one indent level per style.
 func indentUnit(style buffer.IndentStyle) []byte {
 	if style.UseTabs {
 		return []byte{'\t'}
 	}
-	w := style.Width
-	if w <= 0 {
-		w = 4
-	}
-	if w > maxIndentWidth {
-		w = maxIndentWidth
-	}
-	return bytes.Repeat([]byte{' '}, w)
+	return bytes.Repeat([]byte{' '}, clampIndentWidth(style.Width))
 }
 
-// leadingWhitespace returns the leading tabs/spaces of line.
+// leadingWhitespace returns a copy of the leading tabs/spaces of
+// line. Copies to avoid retaining the buffer's line slice.
 func leadingWhitespace(line []byte) []byte {
-	i := 0
-	for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
-		i++
-	}
-	// Return a copy to avoid retaining the buffer's line slice.
-	out := make([]byte, i)
-	copy(out, line[:i])
+	n := leadingWhitespaceLen(line)
+	out := make([]byte, n)
+	copy(out, line[:n])
 	return out
 }
 
@@ -128,13 +127,7 @@ func dedentLine(buf *buffer.Buffer, li int) int {
 	case '\t':
 		remove = 1
 	case ' ':
-		w := buf.Props.IndentStyle.Width
-		if w <= 0 {
-			w = 4
-		}
-		if w > maxIndentWidth {
-			w = maxIndentWidth
-		}
+		w := clampIndentWidth(buf.Props.IndentStyle.Width)
 		for remove < w && remove < len(line) && line[remove] == ' ' {
 			remove++
 		}

@@ -7,12 +7,13 @@
 package fakewin
 
 import (
+	"unicode/utf8"
+
 	"github.com/mike-ward/go-glyph"
 	"github.com/mike-ward/go-gui/gui"
 )
 
-// Advance is the fixed monospace advance used by the fake measurer,
-// in pixels. LineHeight is the fixed line height.
+// Fake measurer constants (pixels).
 const (
 	Advance    float32 = 8
 	LineHeight float32 = 16
@@ -29,7 +30,7 @@ func New() *gui.Window {
 	return w
 }
 
-// NewKeyEvent builds a key-down event with the given code + modifiers.
+// NewKeyEvent builds a key-down event.
 func NewKeyEvent(code gui.KeyCode, mods gui.Modifier) *gui.Event {
 	return &gui.Event{
 		Type:      gui.EventKeyDown,
@@ -38,7 +39,7 @@ func NewKeyEvent(code gui.KeyCode, mods gui.Modifier) *gui.Event {
 	}
 }
 
-// NewCharEvent builds a character-input event for rune r.
+// NewCharEvent builds a character-input event.
 func NewCharEvent(r rune) *gui.Event {
 	return &gui.Event{
 		Type:     gui.EventChar,
@@ -46,8 +47,7 @@ func NewCharEvent(r rune) *gui.Event {
 	}
 }
 
-// NewScrollEvent builds a mouse-scroll event with the given vertical
-// delta (positive = scroll up).
+// NewScrollEvent builds a mouse-scroll event.
 func NewScrollEvent(deltaY float32) *gui.Event {
 	return &gui.Event{
 		Type:    gui.EventMouseScroll,
@@ -55,23 +55,17 @@ func NewScrollEvent(deltaY float32) *gui.Event {
 	}
 }
 
-// NewIMECharEvent builds an EventChar with IMEText set, simulating
-// an IME commit. CharCode is set to the first rune of text.
+// NewIMECharEvent builds an IME commit event.
 func NewIMECharEvent(text string) *gui.Event {
-	var code uint32
-	for _, r := range text {
-		code = uint32(r)
-		break
-	}
+	r, _ := utf8.DecodeRuneInString(text)
 	return &gui.Event{
 		Type:     gui.EventChar,
-		CharCode: code,
+		CharCode: uint32(r),
 		IMEText:  text,
 	}
 }
 
-// NewClickEvent builds a mouse-down (click) event at the given
-// coordinates with optional modifiers.
+// NewClickEvent builds a mouse-down event.
 func NewClickEvent(x, y float32, mods gui.Modifier) *gui.Event {
 	return &gui.Event{
 		Type:      gui.EventMouseDown,
@@ -81,11 +75,9 @@ func NewClickEvent(x, y float32, mods gui.Modifier) *gui.Event {
 	}
 }
 
-// fakeMeasurer is a deterministic monospace measurer. Every character
-// is Advance pixels wide; line height is LineHeight. LayoutText
-// returns a minimal glyph.Layout — the editor's ASCII fast path
-// bypasses LayoutText entirely, so most driver tests never exercise
-// the returned Layout.
+// fakeMeasurer is a deterministic monospace measurer. The editor's
+// ASCII fast path bypasses LayoutText, so most driver tests never
+// exercise the returned Layout.
 type fakeMeasurer struct{}
 
 func (fakeMeasurer) TextWidth(text string, _ gui.TextStyle) float32 {
@@ -100,10 +92,7 @@ func (fakeMeasurer) FontHeight(_ gui.TextStyle) float32 { return LineHeight }
 
 func (fakeMeasurer) FontAscent(_ gui.TextStyle) float32 { return LineHeight * 0.8 }
 
-// LayoutText assumes ASCII input. It produces one CharRect per byte,
-// which is wrong for multibyte UTF-8 runes (continuation bytes get
-// phantom rects). Editor driver tests hit the ASCII fast path in
-// edit/text.Measurer and never call this with non-ASCII content.
+// LayoutText assumes ASCII input (one CharRect per byte).
 func (fakeMeasurer) LayoutText(text string, _ gui.TextStyle, _ float32) (glyph.Layout, error) {
 	rects := make([]glyph.CharRect, len(text))
 	idx := make(map[int]int, len(text))

@@ -113,6 +113,20 @@ func sanitizeDim(x float32) float32 {
 	return x
 }
 
+// digitCount returns the number of decimal digits in n.
+// Zero-alloc alternative to len(strconv.Itoa(n)).
+func digitCount(n int) int {
+	if n <= 0 {
+		return 1
+	}
+	d := 0
+	for n > 0 {
+		d++
+		n /= 10
+	}
+	return d
+}
+
 // Editor returns a go-gui View rendering a scrollable monospace
 // code editor backed by cfg.Buffer. If cfg.Buffer is nil, an empty
 // buffer is installed so the widget never nil-derefs. Width and

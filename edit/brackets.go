@@ -44,25 +44,26 @@ func bracketAtCursor(buf *buffer.Buffer, pos buffer.Position) (byte, buffer.Posi
 }
 
 // findMatchingBracket scans from pos for the matching bracket.
-// Returns (match position, found, capped). capped=true means the
-// scan hit maxBracketScan before finding a match; callers rendering
-// a bracket-match highlight should suppress it in that case, while
-// cursor-movement callers can treat capped as simply "not found."
+// Returns (bracket position, match position, found, capped).
+// capped=true means the scan hit maxBracketScan before finding a
+// match; callers rendering a highlight should suppress it.
 func findMatchingBracket(
 	buf *buffer.Buffer, pos buffer.Position,
-) (buffer.Position, bool, bool) {
+) (bracketPos, matchPos buffer.Position, found, capped bool) {
 	if buf == nil {
-		return buffer.Position{}, false, false
+		return
 	}
 	b, bpos := bracketAtCursor(buf, pos)
 	if b == 0 {
-		return buffer.Position{}, false, false
+		return
 	}
 	match := bracketPairs[b]
 	if isOpener(b) {
-		return scanForward(buf, bpos, b, match)
+		m, ok, cap := scanForward(buf, bpos, b, match)
+		return bpos, m, ok, cap
 	}
-	return scanBackward(buf, bpos, b, match)
+	m, ok, cap := scanBackward(buf, bpos, b, match)
+	return bpos, m, ok, cap
 }
 
 // scanForward searches forward from pos for match, tracking nesting

@@ -287,9 +287,14 @@ func (b *Buffer) editWouldExceedMaxLine(e Edit) bool {
 			(lastLen - e.Range.End.ByteCol)
 		return joined > MaxLineBytes
 	}
-	// Insertion or replace. Split NewBytes into segments to
-	// determine which resulting lines are constructed from
-	// edits, then check the extremes.
+	// Insertion or replace. Fast path: no newline in NewBytes
+	// means a single-segment insert — avoids bytes.Split alloc.
+	if bytes.IndexByte(e.NewBytes, '\n') < 0 {
+		prefix := e.Range.Start.ByteCol
+		suffix := len(b.lines[e.Range.End.Line].bytes()) -
+			e.Range.End.ByteCol
+		return prefix+len(e.NewBytes)+suffix > MaxLineBytes
+	}
 	segs := bytes.Split(e.NewBytes, []byte{'\n'})
 	if len(segs) == 1 {
 		// Single-segment insert collapses to one line: the
@@ -437,7 +442,7 @@ func (b *Buffer) deleteRange(r Range) {
 	}
 	// Truncate first line at Start.ByteCol.
 	first := b.lines[r.Start.Line]
-	first.b = first.b[:r.Start.ByteCol]
+	first.truncate(r.Start.ByteCol)
 	// Append tail of last line.
 	last := b.lines[r.End.Line]
 	first.appendBytes(last.bytes()[r.End.ByteCol:])
@@ -455,12 +460,13 @@ func (b *Buffer) insertAt(pos Position, p []byte) Position {
 	if len(p) == 0 {
 		return pos
 	}
-	segs := bytes.Split(p, []byte{'\n'})
-
-	if len(segs) == 1 {
-		b.lines[pos.Line].insert(pos.ByteCol, segs[0])
-		return Position{Line: pos.Line, ByteCol: pos.ByteCol + len(segs[0])}
+	// Fast path: no newline avoids bytes.Split allocation.
+	if bytes.IndexByte(p, '\n') < 0 {
+		b.lines[pos.Line].insert(pos.ByteCol, p)
+		return Position{Line: pos.Line, ByteCol: pos.ByteCol + len(p)}
 	}
+	segs := bytes.Split(p, []byte{'\n'})
+	// len(segs) >= 2 guaranteed (we checked for '\n' above).
 
 	// Multi-segment insert: split current line, build new lines.
 	cur := b.lines[pos.Line]

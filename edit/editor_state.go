@@ -20,8 +20,8 @@ const capEdit = 64
 // window's StateMap across frames.
 type editorState struct {
 	Cursors  []CursorState // sorted by position; index 0 = primary
-	ScrollY  float32       // vertical scroll offset in pixels
-	ScrollX  float32       // horizontal scroll offset in pixels
+	ScrollY  float32       // pixels
+	ScrollX  float32       // pixels
 	Measurer *text.Measurer
 	Search   searchState
 
@@ -35,10 +35,10 @@ type editorState struct {
 	WrapOverride         int // 0=use cfg, 1=force on, 2=force off
 	StickyScrollOverride int // 0=use cfg, 1=force on, 2=force off
 
-	// Mouse click tracking for double/triple-click detection.
-	LastClickTime int64           // UnixMilli of last mouse-down
-	LastClickPos  buffer.Position // position of last click
-	ClickCount    int             // 1=single, 2=double, 3=triple
+	// Double/triple-click detection.
+	LastClickTime int64 // UnixMilli
+	LastClickPos  buffer.Position
+	ClickCount    int // 1=single, 2=double, 3=triple
 
 	// Help screen overlay.
 	HelpActive  bool

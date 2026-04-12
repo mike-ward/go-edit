@@ -82,18 +82,26 @@ func toggleComment(
 		return
 	}
 
-	// Check if all lines already have the comment prefix.
+	// Single pass: check if all non-blank lines are commented and
+	// find the minimum indent for aligned insertion.
 	allCommented := true
+	minIndent := -1
 	for li := startLine; li <= endLine; li++ {
 		line := buf.Line(li)
 		trimmed := bytes.TrimLeft(line, " \t")
 		if len(trimmed) == 0 {
-			continue // skip blank lines
+			continue
 		}
-		if !bytes.HasPrefix(trimmed, prefixNoSpace) {
+		ws := len(line) - len(trimmed)
+		if minIndent < 0 || ws < minIndent {
+			minIndent = ws
+		}
+		if allCommented && !bytes.HasPrefix(trimmed, prefixNoSpace) {
 			allCommented = false
-			break
 		}
+	}
+	if minIndent < 0 {
+		minIndent = 0
 	}
 
 	buf.BeginGroup()
@@ -123,22 +131,6 @@ func toggleComment(
 			})
 		}
 	} else {
-		// Find minimum indent to align comment prefix.
-		minIndent := -1
-		for li := startLine; li <= endLine; li++ {
-			line := buf.Line(li)
-			trimmed := bytes.TrimLeft(line, " \t")
-			if len(trimmed) == 0 {
-				continue
-			}
-			ws := len(line) - len(trimmed)
-			if minIndent < 0 || ws < minIndent {
-				minIndent = ws
-			}
-		}
-		if minIndent < 0 {
-			minIndent = 0
-		}
 		// Add comment prefix (last → first).
 		for li := endLine; li >= startLine; li-- {
 			line := buf.Line(li)

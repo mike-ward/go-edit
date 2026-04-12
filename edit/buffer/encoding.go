@@ -113,10 +113,6 @@ func isLatin1Plausible(data []byte) bool {
 	return true
 }
 
-// utf8BOM is the UTF-8 encoding of U+FEFF (BOM / zero-width
-// no-break space). Used to strip decoded BOMs from UTF-16 output.
-var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
-
 // decodeToUTF8 transcodes data from enc to UTF-8. Strips BOM if
 // present (both raw BOM bytes and decoded U+FEFF). Returns data
 // unchanged for UTF-8 and Raw.
@@ -129,22 +125,19 @@ func decodeToUTF8(data []byte, enc Encoding) ([]byte, error) {
 			return data[len(bomUTF8):], nil
 		}
 		return data, nil
-	case EncodingUTF16BE:
-		dec := unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM)
-		out, err := dec.NewDecoder().Bytes(data)
+	case EncodingUTF16BE, EncodingUTF16LE:
+		endian := unicode.BigEndian
+		if enc == EncodingUTF16LE {
+			endian = unicode.LittleEndian
+		}
+		out, err := unicode.UTF16(endian, unicode.IgnoreBOM).
+			NewDecoder().Bytes(data)
 		if err != nil {
 			return nil, err
 		}
 		// IgnoreBOM decodes the BOM as U+FEFF; strip it so the
 		// buffer text doesn't contain a stale BOM character.
-		return bytes.TrimPrefix(out, utf8BOM), nil
-	case EncodingUTF16LE:
-		dec := unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM)
-		out, err := dec.NewDecoder().Bytes(data)
-		if err != nil {
-			return nil, err
-		}
-		return bytes.TrimPrefix(out, utf8BOM), nil
+		return bytes.TrimPrefix(out, bomUTF8), nil
 	case EncodingLatin1:
 		return charmap.ISO8859_1.NewDecoder().Bytes(data)
 	case EncodingCP1252:
@@ -169,29 +162,22 @@ func encodeFromUTF8(data []byte, enc Encoding, hasBOM, preserveBOM bool) ([]byte
 			return out, nil
 		}
 		return data, nil
-	case EncodingUTF16BE:
-		enc16 := unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM)
-		encoded, err := enc16.NewEncoder().Bytes(data)
+	case EncodingUTF16BE, EncodingUTF16LE:
+		endian := unicode.BigEndian
+		bom := bomUTF16BE
+		if enc == EncodingUTF16LE {
+			endian = unicode.LittleEndian
+			bom = bomUTF16LE
+		}
+		encoded, err := unicode.UTF16(endian, unicode.IgnoreBOM).
+			NewEncoder().Bytes(data)
 		if err != nil {
 			return nil, err
 		}
 		if hasBOM && preserveBOM {
-			out := make([]byte, len(bomUTF16BE)+len(encoded))
-			copy(out, bomUTF16BE)
-			copy(out[len(bomUTF16BE):], encoded)
-			return out, nil
-		}
-		return encoded, nil
-	case EncodingUTF16LE:
-		enc16 := unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM)
-		encoded, err := enc16.NewEncoder().Bytes(data)
-		if err != nil {
-			return nil, err
-		}
-		if hasBOM && preserveBOM {
-			out := make([]byte, len(bomUTF16LE)+len(encoded))
-			copy(out, bomUTF16LE)
-			copy(out[len(bomUTF16LE):], encoded)
+			out := make([]byte, len(bom)+len(encoded))
+			copy(out, bom)
+			copy(out[len(bom):], encoded)
 			return out, nil
 		}
 		return encoded, nil

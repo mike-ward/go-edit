@@ -23,11 +23,8 @@ type Token struct {
 // maxInt is the "pristine" sentinel for dirtyLineStart.
 const maxInt = int(^uint(0) >> 1)
 
-// maxTokensPerLine caps the number of Token spans stored for a
-// single logical line. Beyond this, additional tokens from
-// chroma are dropped so pathological minified inputs can't grow
-// the per-line cache unboundedly. Visually, clipped tokens render
-// as default text — acceptable degradation under duress.
+// maxTokensPerLine caps per-line token storage to bound memory
+// on pathological inputs (e.g. minified files).
 const maxTokensPerLine = 4096
 
 // Highlighter is a DecorationProvider backed by chroma. It
@@ -146,7 +143,7 @@ func (h *Highlighter) Decorate(
 	h.lastViewport = vp
 
 	if !h.primed {
-		h.retokenize()
+		h.retokenizeFrom(0)
 		h.primed = true
 		h.dirtyLineStart = maxInt
 	} else if h.dirtyLineStart < maxInt {
@@ -181,12 +178,6 @@ func (h *Highlighter) Decorate(
 	return out
 }
 
-// retokenize runs chroma over the full buffer and rebuilds the
-// per-line token cache. Must be called with h.mu held.
-func (h *Highlighter) retokenize() {
-	h.retokenizeFrom(0)
-}
-
 // retokenizeLookahead is the number of lines beyond the viewport
 // that retokenizeFrom processes before stopping. This caps the work
 // for edits near the top of large files to O(viewport + lookahead)
@@ -196,53 +187,30 @@ const retokenizeLookahead = 200
 
 // buildTailText returns the buffer text from line `from` to
 // `stopLine` (exclusive) as a string for chroma to tokenize.
-// Uses Len() to avoid a full Bytes() allocation for the length
-// check when stopLine < lc.
+// Builds directly from per-line data to avoid a full-buffer
+// Bytes() allocation.
 func (h *Highlighter) buildTailText(from, stopLine, lc int) string {
-	var prefixBytes int
-	for i := range from {
-		prefixBytes += len(h.buf.Line(i)) + 1 // +1 for '\n'
+	if stopLine > lc {
+		stopLine = lc
 	}
-	var tailEnd int
-	if stopLine >= lc {
-		tailEnd = h.buf.Len()
-	} else {
-		tailEnd = prefixBytes
-		for i := from; i < stopLine; i++ {
-			tailEnd += len(h.buf.Line(i)) + 1
+	if from >= stopLine {
+		return ""
+	}
+	// Estimate capacity: average 40 bytes/line.
+	var sb strings.Builder
+	sb.Grow((stopLine - from) * 40)
+	for i := from; i < stopLine; i++ {
+		if i > from {
+			sb.WriteByte('\n')
 		}
-		// Trim trailing '\n' if we stopped before EOF to avoid
-		// an extra empty-line artifact.
-		if tailEnd > 0 {
-			tailEnd--
-		}
+		sb.Write(h.buf.Line(i))
 	}
-	fullBytes := h.buf.Bytes()
-	if tailEnd > len(fullBytes) {
-		tailEnd = len(fullBytes)
-	}
-	if prefixBytes > tailEnd {
-		prefixBytes = tailEnd
-	}
-	return string(fullBytes[prefixBytes:tailEnd])
+	return sb.String()
 }
 
-// retokenizeFrom incrementally re-lexes from line `from` toward
-// the end of the buffer, preserving tokens[0..from-1] intact. Any
-// multi-line token that started before `from` forces a restart at
-// the nearest pristine line; the authoritative signal is
-// lineContinues[from-1], populated from chroma's token stream
-// the last time we tokenized that range. If every candidate
-// restart is still "inside" a multi-line construct, we fall all
-// the way back to 0 and full-walk.
-//
-// When the primed cache exists, retokenization is capped at
-// lastViewport.LastLine + retokenizeLookahead. Lines beyond the
-// cap keep their existing cached tokens; dirtyLineStart is set
-// to the cap so the next Decorate call resumes where this one
-// stopped.
-//
-// Must be called with h.mu held.
+// retokenizeFrom re-lexes from line `from`, backing up past any
+// multi-line continuation. Capped at viewport + lookahead when
+// primed. Must be called with h.mu held.
 func (h *Highlighter) retokenizeFrom(from int) {
 	lc := h.buf.LineCount()
 	if from < 0 {
@@ -250,8 +218,8 @@ func (h *Highlighter) retokenizeFrom(from int) {
 	}
 	if from >= lc {
 		// Nothing to do; just resize the caches to match.
-		h.tokens = resizeTokens(h.tokens, lc)
-		h.lineContinues = resizeBools(h.lineContinues, lc)
+		h.tokens = resizeSlice(h.tokens, lc)
+		h.lineContinues = resizeSlice(h.lineContinues, lc)
 		return
 	}
 	// Walk `from` backwards past any line still inside a
@@ -283,8 +251,8 @@ func (h *Highlighter) retokenizeFrom(from int) {
 	if err != nil {
 		// Fall back to clearing the processed range; draw path
 		// handles nil slices as "no decorations."
-		h.tokens = resizeTokens(h.tokens, lc)
-		h.lineContinues = resizeBools(h.lineContinues, lc)
+		h.tokens = resizeSlice(h.tokens, lc)
+		h.lineContinues = resizeSlice(h.lineContinues, lc)
 		for i := from; i < stopLine; i++ {
 			h.tokens[i] = nil
 			h.lineContinues[i] = false
@@ -295,8 +263,8 @@ func (h *Highlighter) retokenizeFrom(from int) {
 	// Prepare cache slots from `from` to `stopLine`. Lines beyond
 	// stopLine keep their existing cached tokens so previously
 	// highlighted off-screen text doesn't flash to default coloring.
-	h.tokens = resizeTokens(h.tokens, lc)
-	h.lineContinues = resizeBools(h.lineContinues, lc)
+	h.tokens = resizeSlice(h.tokens, lc)
+	h.lineContinues = resizeSlice(h.lineContinues, lc)
 	for i := from; i < stopLine; i++ {
 		h.tokens[i] = nil
 		h.lineContinues[i] = false
@@ -307,17 +275,14 @@ func (h *Highlighter) retokenizeFrom(from int) {
 	for tok := iter(); tok.Type != chroma.EOFType; tok = iter() {
 		fg, bold, italic := h.resolveToken(tok.Type)
 		multi := isMultilineTokenType(tok.Type)
-		parts := strings.Split(tok.Value, "\n")
-		for pi, part := range parts {
-			if pi > 0 {
-				// Line boundary crossed inside `tok`. The
-				// line we just left ended inside the token,
-				// so mark it as a continuation.
-				if multi && line < lc {
-					h.lineContinues[line] = true
-				}
-				line++
-				col = 0
+		val := tok.Value
+		first := true
+		for len(val) > 0 || first {
+			first = false
+			nl := strings.IndexByte(val, '\n')
+			part := val
+			if nl >= 0 {
+				part = val[:nl]
 			}
 			if line >= lc || line >= stopLine {
 				break
@@ -334,6 +299,16 @@ func (h *Highlighter) retokenizeFrom(from int) {
 				})
 			}
 			col = end
+			if nl < 0 {
+				break
+			}
+			// Line boundary crossed; mark continuation.
+			if multi && line < lc {
+				h.lineContinues[line] = true
+			}
+			line++
+			col = 0
+			val = val[nl+1:]
 		}
 		if line >= lc || line >= stopLine {
 			break
@@ -354,15 +329,12 @@ func (h *Highlighter) retokenizeFrom(from int) {
 	}
 }
 
-// isMultilineTokenType reports whether tt is a chroma token type
-// that can legitimately span line boundaries — strings, comments,
-// and their sub-categories. A boundary crossed inside such a
-// token forces the incremental restart to back up past the
-// affected lines.
+// isMultilineTokenType reports whether tt can span line
+// boundaries (strings, comments). String == LiteralString in
+// chroma, so one check covers both.
 func isMultilineTokenType(tt chroma.TokenType) bool {
 	return tt.InCategory(chroma.Comment) ||
-		tt.InCategory(chroma.String) ||
-		tt.InCategory(chroma.LiteralString)
+		tt.InCategory(chroma.String)
 }
 
 // prevLineIsContinuation reports whether the line at index from-1
@@ -377,30 +349,18 @@ func (h *Highlighter) prevLineIsContinuation(from int) bool {
 	return h.lineContinues[from-1]
 }
 
-// resizeBools grows or shrinks b to length lc, preserving
-// existing entries where possible. Extra entries are false.
-func resizeBools(b []bool, lc int) []bool {
-	if cap(b) >= lc {
-		grown := b[:lc]
-		// Zero any previously-used slots beyond the old length.
-		for i := len(b); i < lc; i++ {
-			grown[i] = false
+// resizeSlice grows or shrinks s to length n, preserving
+// existing entries where possible.
+func resizeSlice[T any](s []T, n int) []T {
+	if cap(s) >= n {
+		grown := s[:n]
+		if n > len(s) {
+			clear(grown[len(s):])
 		}
 		return grown
 	}
-	grown := make([]bool, lc)
-	copy(grown, b)
-	return grown
-}
-
-// resizeTokens grows or shrinks tokens to length lc, preserving
-// existing entries where possible.
-func resizeTokens(tokens [][]Token, lc int) [][]Token {
-	if cap(tokens) >= lc {
-		return tokens[:lc]
-	}
-	grown := make([][]Token, lc)
-	copy(grown, tokens)
+	grown := make([]T, n)
+	copy(grown, s)
 	return grown
 }
 

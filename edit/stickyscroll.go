@@ -1,22 +1,13 @@
 package edit
 
-import "github.com/mike-ward/go-edit/edit/buffer"
+import (
+	"slices"
+
+	"github.com/mike-ward/go-edit/edit/buffer"
+)
 
 // defaultStickyMax is the maximum number of sticky scroll lines.
 const defaultStickyMax = 5
-
-// resolveStickyScroll returns whether sticky scroll is active,
-// applying the runtime override.
-func resolveStickyScroll(cfg bool, override int) bool {
-	switch override {
-	case 1:
-		return true
-	case 2:
-		return false
-	default:
-		return cfg
-	}
-}
 
 // findScopeHeaders walks backward from firstVisibleLine,
 // collecting lines with strictly decreasing indentation. These
@@ -56,9 +47,6 @@ func findScopeHeaders(
 			}
 		}
 	}
-	// Reverse so outermost is first.
-	for l, r := 0, len(headers)-1; l < r; l, r = l+1, r-1 {
-		headers[l], headers[r] = headers[r], headers[l]
-	}
+	slices.Reverse(headers)
 	return headers
 }

@@ -84,7 +84,7 @@ func (ms *MarkSet) adjust(e Edit, endPos Position) {
 		case m.pos.Before(delStart):
 			// Before edit: unchanged.
 
-		case hasDelete && posInRange(m.pos, delStart, delEnd, m.gravity):
+		case hasDelete && posInRange(m.pos, delStart, delEnd):
 			// Inside deleted range: collapse.
 			if m.gravity == GravityLeft {
 				m.pos = delStart
@@ -110,19 +110,9 @@ func (ms *MarkSet) adjust(e Edit, endPos Position) {
 	}
 }
 
-// posInRange reports whether p is strictly inside [start, end),
-// respecting gravity at boundaries.
-func posInRange(p, start, end Position, g Gravity) bool {
-	if p.After(start) && p.Before(end) {
-		return true
-	}
-	// At start: GravityRight marks are inside (they would be
-	// pushed by an insert at start).
-	if p == start && g == GravityRight {
-		return false // start boundary = not inside
-	}
-	// At end: marks at end are outside the half-open range.
-	return false
+// posInRange reports whether p is strictly inside (start, end).
+func posInRange(p, start, end Position) bool {
+	return p.After(start) && p.Before(end)
 }
 
 // shiftPos adjusts pos for the replacement of [delStart, delEnd)

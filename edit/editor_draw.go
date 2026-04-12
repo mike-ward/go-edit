@@ -97,7 +97,6 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 		for visRow <= lastVis && i < total {
 			lineBytes := buf.Line(i)
 
-			// Compute wrap breaks for this line.
 			var breaks []int
 			numSubRows := 1
 			if wrapOn && st.Measurer != nil {
@@ -106,7 +105,6 @@ func editorOnDraw(cfg EditorCfg, frame *editorFrameData) func(*gui.DrawContext) 
 				numSubRows = len(breaks) + 1
 			}
 
-			// Draw sub-rows of this line.
 			for sr := curSubRow; sr < numSubRows &&
 				visRow <= lastVis; sr++ {
 				y := float32(visRow)*lh - st.ScrollY
@@ -479,7 +477,7 @@ func drawLineText(
 		return
 	}
 	if len(breaks) == 0 {
-		lineDecos := decosForLine(decos, line)
+		lineDecos := decosForLine(decos, line, nil)
 		if len(lineDecos) == 0 {
 			if len(lineBytes) > 0 {
 				textLeftClip(dc, textX, y,
@@ -652,7 +650,7 @@ func drawStickyScroll(
 		}
 
 		// Line text with syntax highlighting.
-		lineDecos := decosForLine(decos, line)
+		lineDecos := decosForLine(decos, line, nil)
 		if len(lineDecos) == 0 {
 			if len(lineBytes) > 0 {
 				textLeftClip(dc, textX, y,
@@ -679,13 +677,12 @@ func decoCompare(a, b buffer.Decoration) int {
 }
 
 // decosForLine returns the subset of sorted decos that touch
-// line i. Since decos is sorted by start line, this is a scan
-// that stops early.
-func decosForLine(decos []buffer.Decoration, line int) []buffer.Decoration {
+// line i. Appends to scratch to avoid per-line allocation; caller
+// should pass scratch[:0].
+func decosForLine(decos []buffer.Decoration, line int, scratch []buffer.Decoration) []buffer.Decoration {
 	if line < 0 {
-		return nil
+		return scratch
 	}
-	var out []buffer.Decoration
 	for j := range decos {
 		d := &decos[j]
 		if d.Kind != buffer.DecoToken {
@@ -697,9 +694,9 @@ func decosForLine(decos []buffer.Decoration, line int) []buffer.Decoration {
 		if d.Range.End.Line < line {
 			continue
 		}
-		out = append(out, *d)
+		scratch = append(scratch, *d)
 	}
-	return out
+	return scratch
 }
 
 // renderStyledLine draws a line split into styled spans per the

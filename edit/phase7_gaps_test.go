@@ -309,19 +309,19 @@ func TestIsFoldHeader_Empty(t *testing.T) {
 	}
 }
 
-// ---- stickyscroll.go: resolveStickyScroll ----
+// ---- wrap.go: resolveBoolOverride (was resolveStickyScroll) ----
 
-func TestResolveStickyScroll(t *testing.T) {
-	if resolveStickyScroll(false, 0) {
+func TestResolveBoolOverride_Sticky(t *testing.T) {
+	if resolveBoolOverride(false, 0) {
 		t.Error("default false, no override")
 	}
-	if !resolveStickyScroll(true, 0) {
+	if !resolveBoolOverride(true, 0) {
 		t.Error("default true, no override")
 	}
-	if !resolveStickyScroll(false, 1) {
+	if !resolveBoolOverride(false, 1) {
 		t.Error("override on")
 	}
-	if resolveStickyScroll(true, 2) {
+	if resolveBoolOverride(true, 2) {
 		t.Error("override off")
 	}
 }

@@ -24,6 +24,8 @@ func (l *line) len() int { return len(l.b) }
 func (l *line) bytes() []byte { return l.b }
 
 // insert inserts p at byte column col. col is clamped to [0, len].
+// Reuses backing capacity when possible to avoid allocation on
+// single-character typing.
 func (l *line) insert(col int, p []byte) {
 	if col < 0 {
 		col = 0
@@ -31,7 +33,14 @@ func (l *line) insert(col int, p []byte) {
 	if col > len(l.b) {
 		col = len(l.b)
 	}
-	out := make([]byte, len(l.b)+len(p))
+	newLen := len(l.b) + len(p)
+	if cap(l.b) >= newLen {
+		l.b = l.b[:newLen]
+		copy(l.b[col+len(p):], l.b[col:newLen-len(p)])
+		copy(l.b[col:], p)
+		return
+	}
+	out := make([]byte, newLen)
 	copy(out, l.b[:col])
 	copy(out[col:], p)
 	copy(out[col+len(p):], l.b[col:])
@@ -66,7 +75,13 @@ func (l *line) split(col int) []byte {
 	return tail
 }
 
-// appendBytes appends p to the line.
+// truncate discards bytes at and after col.
+func (l *line) truncate(col int) {
+	if col < len(l.b) {
+		l.b = l.b[:col]
+	}
+}
+
 func (l *line) appendBytes(p []byte) {
 	l.b = append(l.b, p...)
 }

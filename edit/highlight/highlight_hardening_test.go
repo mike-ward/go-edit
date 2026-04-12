@@ -199,10 +199,10 @@ func TestIsMultilineTokenType_Categories(t *testing.T) {
 }
 
 // TestResizeBools_GrowShrinkNil covers the grow, shrink, nil,
-// and cap-reuse branches of resizeBools.
+// and cap-reuse branches of resizeSlice.
 func TestResizeBools_GrowShrinkNil(t *testing.T) {
 	// Nil input, grow to 3.
-	got := resizeBools(nil, 3)
+	got := resizeSlice[bool](nil, 3)
 	if len(got) != 3 {
 		t.Fatalf("nil grow: len = %d, want 3", len(got))
 	}
@@ -214,7 +214,7 @@ func TestResizeBools_GrowShrinkNil(t *testing.T) {
 	// Grow a small slice. Reuses capacity if available.
 	in := make([]bool, 2, 8)
 	in[0], in[1] = true, true
-	got = resizeBools(in, 5)
+	got = resizeSlice(in, 5)
 	if len(got) != 5 {
 		t.Fatalf("small grow: len = %d, want 5", len(got))
 	}
@@ -228,7 +228,7 @@ func TestResizeBools_GrowShrinkNil(t *testing.T) {
 	}
 	// Shrink.
 	in = []bool{true, true, true, true}
-	got = resizeBools(in, 2)
+	got = resizeSlice(in, 2)
 	if len(got) != 2 {
 		t.Fatalf("shrink: len = %d, want 2", len(got))
 	}
@@ -238,7 +238,7 @@ func TestResizeBools_GrowShrinkNil(t *testing.T) {
 	// Cap exactly matches len.
 	in = make([]bool, 3)
 	in[2] = true
-	got = resizeBools(in, 3)
+	got = resizeSlice(in, 3)
 	if !got[2] {
 		t.Error("cap-eq: existing entry wiped")
 	}

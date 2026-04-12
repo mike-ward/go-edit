@@ -1,7 +1,6 @@
 package edit
 
 import (
-	"strconv"
 	"unsafe"
 
 	"github.com/mike-ward/go-edit/edit/text"
@@ -77,7 +76,7 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 
 		var gutterW float32
 		if cfg.ShowLineNumbers {
-			digits := len(strconv.Itoa(cfg.Buffer.LineCount()))
+			digits := digitCount(cfg.Buffer.LineCount())
 			digits = max(digits, 3)
 			var sb [12]byte // stack buffer; covers up to 12 digits
 			n := min(digits, len(sb))
@@ -101,7 +100,7 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		}
 
 		// Resolve wrap state (before clampScroll needs it).
-		wrapActive := resolveWrap(cfg.LineWrap, st.WrapOverride)
+		wrapActive := resolveBoolOverride(cfg.LineWrap, st.WrapOverride)
 		frame.wrapActive = wrapActive
 		if wrapActive {
 			frame.wrapWidth = cfg.Width - gutterW - advance/2
@@ -160,11 +159,7 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		updateIMEState(cfg, &st, frame, w, gutterW,
 			advance, lh, wrapActive)
 
-		// Compute the draw cache version after all frame state is
-		// populated, then write it into the DrawCanvas shape.
-		// layout.Children[0] is the canvas created in the Editor
-		// factory. If the layout shape has changed for any reason
-		// the fold result differs and go-gui re-tessellates.
+		// go-gui skips OnDraw when Version matches the prior frame.
 		frame.drawVersion = computeDrawVersion(cfg, &st, frame)
 		if len(layout.Children) > 0 &&
 			layout.Children[0].Shape != nil {
@@ -191,10 +186,10 @@ func executePendingAction(
 	if !ok {
 		action, ok = defaultActions[actionID]
 	}
-	if !ok || (cfg.ReadOnly && isEditAction(actionID)) {
+	isEdit := isEditAction(actionID)
+	if !ok || (cfg.ReadOnly && isEdit) {
 		return
 	}
-	isEdit := isEditAction(actionID)
 	if isEdit && actionID != "edit.undo" &&
 		actionID != "edit.redo" {
 		cfg.Buffer.SetUndoCursorState(

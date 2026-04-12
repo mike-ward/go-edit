@@ -13,7 +13,7 @@ func syncSearchObserver(
 	remove func(),
 ) func() {
 	if st.Search.Active && len(st.Search.Query) > 0 &&
-		needsRecompute(&st.Search) {
+		st.Search.needsRecompute() {
 		recomputeMatches(st, cfg.Buffer)
 	}
 	if st.Search.Active && remove == nil {
@@ -76,14 +76,10 @@ func computeBracketMatch(
 		return
 	}
 	if cfg.ShowBracketMatch && len(st.Cursors) > 0 {
-		// Suppress the highlight when the scan was capped; treat
-		// the match as unknown rather than drawing a misleading
-		// pair.
-		m, ok, capped := findMatchingBracket(
+		// Suppress the highlight when the scan was capped.
+		bpos, m, ok, capped := findMatchingBracket(
 			cfg.Buffer, st.Cursors[0].Cursor)
 		if ok && !capped {
-			_, bpos := bracketAtCursor(
-				cfg.Buffer, st.Cursors[0].Cursor)
 			frame.bracketMatch = [2]buffer.Position{bpos, m}
 			frame.bracketFound = true
 		}
@@ -97,7 +93,7 @@ func computeStickyScroll(
 	frame *editorFrameData, lh float32,
 ) {
 	frame.stickyLines = nil
-	stickyOn := resolveStickyScroll(
+	stickyOn := resolveBoolOverride(
 		cfg.StickyScroll, st.StickyScrollOverride)
 	if !stickyOn || lh <= 0 || lh != lh { // NaN
 		return
@@ -115,17 +111,10 @@ func computeStickyScroll(
 	if st.Measurer != nil {
 		tw = st.Measurer.TabWidth
 	}
-	var firstLogical int
-	if frame.wrapActive && st.Measurer != nil {
-		firstLogical, _ = globalVisualRowToLogical(
-			cfg.Buffer, st.Measurer, frame.wrapWidth,
-			st.FoldedRanges, firstVis)
-	} else if len(st.FoldedRanges) > 0 {
-		firstLogical = visibleToLogical(
-			firstVis, st.FoldedRanges)
-	} else {
-		firstLogical = firstVis
-	}
+	hasFolds := cfg.EnableFolding && len(st.FoldedRanges) > 0
+	firstLogical, _ := visRowToStartLine(
+		cfg.Buffer, st.Measurer, frame, st.FoldedRanges,
+		hasFolds, frame.wrapActive, firstVis)
 	frame.stickyLines = findScopeHeaders(
 		cfg.Buffer, firstLogical, stickyMax, tw)
 }

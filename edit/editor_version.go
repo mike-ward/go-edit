@@ -2,10 +2,15 @@ package edit
 
 import "math"
 
+// FNV-1a constants for draw-version hashing.
+const (
+	fnvOffset = 14695981039346656037
+	fnvPrime  = 1099511628211
+)
+
 // floatBitsStable returns a hash-stable uint64 representation of
-// f. NaN has many bit patterns and +0/-0 compare equal but have
-// different bits; canonicalize both so the draw-version fold
-// doesn't thrash on upstream guard failures.
+// f. Canonicalizes NaN and ±0 so the draw-version fold doesn't
+// thrash on upstream guard failures.
 func floatBitsStable(f float32) uint64 {
 	if f != f { // NaN
 		return 0x7fc00000 // canonical quiet NaN
@@ -28,10 +33,6 @@ func floatBitsStable(f float32) uint64 {
 func computeDrawVersion(
 	cfg EditorCfg, st *editorState, frame *editorFrameData,
 ) uint64 {
-	const (
-		fnvOffset = 14695981039346656037
-		fnvPrime  = 1099511628211
-	)
 	fold := func(acc, v uint64) uint64 {
 		return (acc ^ v) * fnvPrime
 	}
@@ -103,14 +104,13 @@ func computeDrawVersion(
 // cursorFoldHash folds every cursor's (line, col, anchor) into a
 // single uint64. Allocation-free.
 func cursorFoldHash(cursors []CursorState) uint64 {
-	const prime = 1099511628211
-	h := uint64(14695981039346656037)
+	h := uint64(fnvOffset)
 	for i := range cursors {
 		c := &cursors[i]
-		h = (h ^ uint64(c.Cursor.Line)) * prime
-		h = (h ^ uint64(c.Cursor.ByteCol)) * prime
-		h = (h ^ uint64(c.Anchor.Line)) * prime
-		h = (h ^ uint64(c.Anchor.ByteCol)) * prime
+		h = (h ^ uint64(c.Cursor.Line)) * fnvPrime
+		h = (h ^ uint64(c.Cursor.ByteCol)) * fnvPrime
+		h = (h ^ uint64(c.Anchor.Line)) * fnvPrime
+		h = (h ^ uint64(c.Anchor.ByteCol)) * fnvPrime
 	}
 	return h
 }

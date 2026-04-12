@@ -85,20 +85,9 @@ func (m *Measurer) InvalidateCache() {
 func (m *Measurer) layoutCached(
 	lineBytes []byte,
 ) (glyph.Layout, bool) {
-	// Compare bytes directly to avoid string allocation on
-	// cache hits. unsafe.String is not needed; the compiler
-	// optimizes the comparison when the string is short-lived.
-	if m.cacheOK && len(m.cacheKey) == len(lineBytes) {
-		hit := true
-		for i := range lineBytes {
-			if m.cacheKey[i] != lineBytes[i] {
-				hit = false
-				break
-			}
-		}
-		if hit {
-			return m.cacheLay, true
-		}
+	// The compiler optimizes string(b)==s to avoid allocation.
+	if m.cacheOK && string(lineBytes) == m.cacheKey {
+		return m.cacheLay, true
 	}
 	if m.tm == nil {
 		return glyph.Layout{}, false
@@ -114,15 +103,13 @@ func (m *Measurer) layoutCached(
 	return layout, true
 }
 
-// Advance returns the cached width of "M". Use as a fallback
-// estimate only — prefer TextWidth or layout queries for
-// pixel-accurate measurements.
+// Advance returns the cached width of "M".
 func (m *Measurer) Advance() float32 { return m.advance }
 
-// LineHeight returns the cached line height.
+// LineHeight returns the cached line height in pixels.
 func (m *Measurer) LineHeight() float32 { return m.lineHeight }
 
-// Style returns the text style this measurer was built with.
+// Style returns the text style used by this measurer.
 func (m *Measurer) Style() gui.TextStyle { return m.style }
 
 // TextWidth returns the pixel width of s in the Measurer's style.
@@ -318,38 +305,11 @@ func byteColForVisualCol(p []byte, targetVCol, tabWidth int) int {
 }
 
 // ExpandTabs replaces each '\t' in line with spaces aligned to
-// tab stops of width tabWidth. The returned string has the same
-// visual layout as XForColumn computes. If there are no tabs the
-// original bytes are returned as a string with no allocation beyond
-// the string conversion.
+// tab stops of width tabWidth. If there are no tabs the original
+// bytes are returned as a string with no allocation beyond the
+// string conversion.
 func ExpandTabs(line []byte, tabWidth int) string {
-	if tabWidth <= 0 {
-		tabWidth = DefaultTabWidth
-	}
-	// Fast path: no tabs.
-	if !slices.Contains(line, '\t') {
-		return string(line)
-	}
-	var out []byte
-	vcol := 0
-	for i := 0; i < len(line); {
-		r, sz := utf8.DecodeRune(line[i:])
-		if sz == 0 {
-			sz = 1
-		}
-		if r == '\t' {
-			next := vcol/tabWidth*tabWidth + tabWidth
-			for vcol < next {
-				out = append(out, ' ')
-				vcol++
-			}
-		} else {
-			out = append(out, line[i:i+sz]...)
-			vcol++
-		}
-		i += sz
-	}
-	return string(out)
+	return ExpandTabsSpan(line, 0, tabWidth)
 }
 
 // ExpandTabsSpan replaces tabs in a slice of line starting at the
@@ -362,25 +322,35 @@ func ExpandTabsSpan(span []byte, startVCol, tabWidth int) string {
 	if !slices.Contains(span, '\t') {
 		return string(span)
 	}
-	var out []byte
+	// Pre-allocate: each tab expands to at most tabWidth spaces.
+	out := make([]byte, 0, len(span)+tabWidth*4)
 	vcol := startVCol
+	runStart := 0
 	for i := 0; i < len(span); {
-		r, sz := utf8.DecodeRune(span[i:])
-		if sz == 0 {
-			sz = 1
-		}
-		if r == '\t' {
+		if span[i] == '\t' {
+			out = append(out, span[runStart:i]...)
 			next := vcol/tabWidth*tabWidth + tabWidth
 			for vcol < next {
 				out = append(out, ' ')
 				vcol++
 			}
+			i++
+			runStart = i
 		} else {
-			out = append(out, span[i:i+sz]...)
-			vcol++
+			if span[i] < utf8.RuneSelf {
+				vcol++
+				i++
+			} else {
+				_, sz := utf8.DecodeRune(span[i:])
+				if sz == 0 {
+					sz = 1
+				}
+				vcol++
+				i += sz
+			}
 		}
-		i += sz
 	}
+	out = append(out, span[runStart:]...)
 	return string(out)
 }
 
@@ -392,18 +362,4 @@ func IsASCII(p []byte) bool {
 		}
 	}
 	return true
-}
-
-func clampASCIICol(p []byte, x, advance float32) int {
-	if advance <= 0 {
-		return 0
-	}
-	col := int((x + advance/2) / advance)
-	if col < 0 {
-		return 0
-	}
-	if col > len(p) {
-		return len(p)
-	}
-	return col
 }

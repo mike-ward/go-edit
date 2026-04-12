@@ -70,7 +70,7 @@ func TestDecosForLine_NoMatch(t *testing.T) {
 		tokenDeco(0, 0, 0, 5),
 		tokenDeco(2, 0, 2, 3),
 	}
-	got := decosForLine(decos, 1)
+	got := decosForLine(decos, 1, nil)
 	if len(got) != 0 {
 		t.Fatalf("expected 0 decos for line 1, got %d", len(got))
 	}
@@ -82,7 +82,7 @@ func TestDecosForLine_ExactMatch(t *testing.T) {
 		tokenDeco(1, 0, 1, 3),
 		tokenDeco(2, 0, 2, 3),
 	}
-	got := decosForLine(decos, 1)
+	got := decosForLine(decos, 1, nil)
 	if len(got) != 1 {
 		t.Fatalf("expected 1, got %d", len(got))
 	}
@@ -91,7 +91,7 @@ func TestDecosForLine_ExactMatch(t *testing.T) {
 func TestDecosForLine_MultiLineDeco(t *testing.T) {
 	// A decoration spanning lines 1-3 should match line 2.
 	decos := []buffer.Decoration{tokenDeco(1, 0, 3, 5)}
-	got := decosForLine(decos, 2)
+	got := decosForLine(decos, 2, nil)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 (multi-line span), got %d", len(got))
 	}
@@ -105,7 +105,7 @@ func TestDecosForLine_SkipsNonToken(t *testing.T) {
 			End:   buffer.Position{Line: 0, ByteCol: 5},
 		},
 	}}
-	got := decosForLine(decos, 0)
+	got := decosForLine(decos, 0, nil)
 	if len(got) != 0 {
 		t.Fatalf("should skip non-token, got %d", len(got))
 	}
@@ -117,14 +117,14 @@ func TestDecosForLine_EarlyBreak(t *testing.T) {
 		tokenDeco(10, 0, 10, 3),
 	}
 	// Line 0 — should break immediately at first deco.
-	got := decosForLine(decos, 0)
+	got := decosForLine(decos, 0, nil)
 	if len(got) != 0 {
 		t.Fatalf("expected 0, got %d", len(got))
 	}
 }
 
 func TestDecosForLine_EmptySlice(t *testing.T) {
-	got := decosForLine(nil, 0)
+	got := decosForLine(nil, 0, nil)
 	if len(got) != 0 {
 		t.Fatalf("expected 0, got %d", len(got))
 	}

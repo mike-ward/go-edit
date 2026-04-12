@@ -34,7 +34,7 @@ func TestBracketAtCursor_LineOutOfRange(t *testing.T) {
 }
 
 func TestFindMatchingBracket_NilBuf(t *testing.T) {
-	_, ok, capped := findMatchingBracket(nil, buffer.Position{})
+	_, _, ok, capped := findMatchingBracket(nil, buffer.Position{})
 	if ok {
 		t.Fatal("expected false for nil buf")
 	}

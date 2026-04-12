@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mike-ward/go-edit/edit/buffer"
+	"github.com/mike-ward/go-edit/edit/text"
 	"github.com/mike-ward/go-gui/gui"
 )
 
@@ -99,15 +100,10 @@ func findAllMatches(
 	} else {
 		matches = findAllLiteral(buf, query, caseSensitive)
 	}
-	if !isEmptyRange(scope) && len(matches) > 0 {
+	if !scope.Empty() && len(matches) > 0 {
 		matches = filterToScope(matches, scope)
 	}
 	return matches, re
-}
-
-// isEmptyRange reports whether r is the zero/empty range.
-func isEmptyRange(r buffer.Range) bool {
-	return r.Start == r.End
 }
 
 // filterToScope returns only matches fully contained within scope.
@@ -187,15 +183,7 @@ func toLowerReuse(src []byte, buf *[]byte) []byte {
 	if len(src) == 0 {
 		return src
 	}
-	// ASCII fast path: lowercase in-place into scratch buffer.
-	ascii := true
-	for _, b := range src {
-		if b >= 0x80 {
-			ascii = false
-			break
-		}
-	}
-	if !ascii {
+	if !text.IsASCII(src) {
 		return bytes.ToLower(src)
 	}
 	if cap(*buf) < len(src) {
@@ -280,7 +268,7 @@ func recomputeMatches(st *editorState, buf *buffer.Buffer) {
 }
 
 // needsRecompute reports whether matches need rebuilding.
-func needsRecompute(ss *searchState) bool {
+func (ss *searchState) needsRecompute() bool {
 	if ss.matchesDirty {
 		return true
 	}
@@ -320,6 +308,19 @@ func matchesForLine(matches []buffer.Range, line int) []buffer.Range {
 
 // ---------- replace ----------
 
+// prepareReplace ensures matches are current. Returns false if
+// replace should be skipped (read-only or no matches).
+func prepareReplace(cfg EditorCfg, st *editorState, buf *buffer.Buffer) bool {
+	if cfg.ReadOnly {
+		return false
+	}
+	ss := &st.Search
+	if ss.needsRecompute() || (len(ss.Matches) == 0 && len(ss.Query) > 0) {
+		recomputeMatches(st, buf)
+	}
+	return len(ss.Matches) > 0
+}
+
 // replaceCurrentMatch replaces the match at CurrentMatch and
 // advances to the next match.
 func replaceCurrentMatch(
@@ -327,15 +328,10 @@ func replaceCurrentMatch(
 	st *editorState,
 	buf *buffer.Buffer,
 ) {
-	ss := &st.Search
-	if cfg.ReadOnly {
+	if !prepareReplace(cfg, st, buf) {
 		return
 	}
-	// Recompute if buffer changed since last match computation,
-	// or if matches are stale (empty but query non-empty).
-	if needsRecompute(ss) || (len(ss.Matches) == 0 && len(ss.Query) > 0) {
-		recomputeMatches(st, buf)
-	}
+	ss := &st.Search
 	if ss.CurrentMatch < 0 || ss.CurrentMatch >= len(ss.Matches) {
 		return
 	}
@@ -365,19 +361,10 @@ func replaceAllMatches(
 	st *editorState,
 	buf *buffer.Buffer,
 ) {
+	if !prepareReplace(cfg, st, buf) {
+		return
+	}
 	ss := &st.Search
-	if cfg.ReadOnly {
-		return
-	}
-	// Recompute if buffer changed (e.g. after undo) since last
-	// match computation, or if matches are empty but query is not
-	// (post-replace state where buffer was reverted by undo).
-	if needsRecompute(ss) || (len(ss.Matches) == 0 && len(ss.Query) > 0) {
-		recomputeMatches(st, buf)
-	}
-	if len(ss.Matches) == 0 {
-		return
-	}
 
 	buf.SetUndoCursorState(buildUndoCursorState(st))
 	buf.BeginGroup()
@@ -582,24 +569,18 @@ func handleSearchModKey(
 
 // handleSearchChar inserts a character into the active search field.
 func handleSearchChar(st *editorState, buf *buffer.Buffer, r rune) {
-	ss := &st.Search
-	ss.clampFieldCursor()
-	field := ss.activeField()
-	if len(*field) >= maxFieldLen {
-		return
-	}
 	var rb [4]byte
 	n := utf8.EncodeRune(rb[:], r)
-	*field = spliceField(*field, ss.FieldCursor, ss.FieldCursor, string(rb[:n]))
-	ss.FieldCursor += n
-	if !ss.FocusReplace {
-		recomputeMatches(st, buf)
-	}
+	handleSearchInsert(st, buf, string(rb[:n]))
 }
 
 // handleSearchString inserts a string (e.g. IME commit) into
 // the active search field.
 func handleSearchString(st *editorState, buf *buffer.Buffer, s string) {
+	handleSearchInsert(st, buf, s)
+}
+
+func handleSearchInsert(st *editorState, buf *buffer.Buffer, s string) {
 	ss := &st.Search
 	ss.clampFieldCursor()
 	field := ss.activeField()

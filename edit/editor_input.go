@@ -90,14 +90,14 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 		stack.Push(km)
 	}
 
-	actions := make(map[string]Action, len(defaultActions)+6)
+	actions := make(map[string]Action, len(defaultActions)+4+len(cfg.Actions))
 	maps.Copy(actions, defaultActions)
 	// Page actions need frame for viewport height.
 	for _, a := range []Action{
-		pageUpAction(cfg, frame),
-		pageDownAction(cfg, frame),
-		selectPageUpAction(cfg, frame),
-		selectPageDownAction(cfg, frame),
+		pageAction("cursor.pageup", moveUp, false, cfg, frame),
+		pageAction("cursor.pagedown", moveDown, false, cfg, frame),
+		pageAction("select.pageup", moveUp, true, cfg, frame),
+		pageAction("select.pagedown", moveDown, true, cfg, frame),
 	} {
 		actions[a.ID] = a
 	}
@@ -116,26 +116,24 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 			return
 		}
 
-		// Overlay intercepts: help and find bar get first
-		// crack at key events, using a single state load.
-		{
-			st := loadState(w, cfg.IDFocus)
-			if st.HelpActive {
-				handleHelpKey(&st, e, frame.lineHeight,
-					cfg.Height, frame.helpEntries)
+		st := loadState(w, cfg.IDFocus)
+
+		// Overlay intercepts: help and find bar get first crack.
+		if st.HelpActive {
+			handleHelpKey(&st, e, frame.lineHeight,
+				cfg.Height, frame.helpEntries)
+			resetBlink(cfg, &st)
+			storeState(w, cfg.IDFocus, st)
+			e.IsHandled = true
+			return
+		}
+		if st.Search.Active {
+			if handleSearchKey(cfg, &st, cfg.Buffer, e) {
+				ensureCursorVisible(&st, frame, cfg)
 				resetBlink(cfg, &st)
 				storeState(w, cfg.IDFocus, st)
 				e.IsHandled = true
 				return
-			}
-			if st.Search.Active {
-				if handleSearchKey(cfg, &st, cfg.Buffer, e) {
-					ensureCursorVisible(&st, frame, cfg)
-					resetBlink(cfg, &st)
-					storeState(w, cfg.IDFocus, st)
-					e.IsHandled = true
-					return
-				}
 			}
 		}
 
@@ -153,7 +151,6 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 			return
 		}
 
-		st := loadState(w, cfg.IDFocus)
 		resetBlink(cfg, &st)
 
 		// Record cursor before edit for undo (skip for undo/redo
@@ -260,21 +257,20 @@ func editorOnChar(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.
 			return
 		}
 
+		st := loadState(w, cfg.IDFocus)
+
 		// Overlay intercepts: help consumes all chars;
 		// find bar routes to search input.
-		{
-			st := loadState(w, cfg.IDFocus)
-			if st.HelpActive {
-				e.IsHandled = true
-				return
-			}
-			if st.Search.Active {
-				handleSearchChar(&st, cfg.Buffer, r)
-				resetBlink(cfg, &st)
-				storeState(w, cfg.IDFocus, st)
-				e.IsHandled = true
-				return
-			}
+		if st.HelpActive {
+			e.IsHandled = true
+			return
+		}
+		if st.Search.Active {
+			handleSearchChar(&st, cfg.Buffer, r)
+			resetBlink(cfg, &st)
+			storeState(w, cfg.IDFocus, st)
+			e.IsHandled = true
+			return
 		}
 
 		if cfg.ReadOnly {
@@ -282,8 +278,6 @@ func editorOnChar(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *gui.
 		}
 		var buf2 [4]byte
 		n := utf8.EncodeRune(buf2[:], r)
-
-		st := loadState(w, cfg.IDFocus)
 		resetBlink(cfg, &st)
 
 		// Auto-close: skip over existing closer instead of

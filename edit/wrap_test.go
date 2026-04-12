@@ -100,17 +100,17 @@ func TestWrapCursorVisualRow(t *testing.T) {
 	}
 }
 
-func TestResolveWrap(t *testing.T) {
-	if resolveWrap(false, 0) {
+func TestResolveBoolOverride(t *testing.T) {
+	if resolveBoolOverride(false, 0) {
 		t.Error("default false, no override")
 	}
-	if !resolveWrap(true, 0) {
+	if !resolveBoolOverride(true, 0) {
 		t.Error("default true, no override")
 	}
-	if !resolveWrap(false, 1) {
+	if !resolveBoolOverride(false, 1) {
 		t.Error("override on")
 	}
-	if resolveWrap(true, 2) {
+	if resolveBoolOverride(true, 2) {
 		t.Error("override off")
 	}
 }

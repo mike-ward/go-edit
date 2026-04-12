@@ -84,9 +84,7 @@ func computeBreaks(
 	for subStart < len(lineBytes) && len(breaks) < maxBreaks {
 		// Find byte column where this sub-row exceeds wrapWidth.
 		// Measure from subStart to find the break point.
-		sub := lineBytes[subStart:]
-		breakCol := findBreakCol(sub, m, wrapWidth, subStart,
-			lineBytes)
+		breakCol := findBreakCol(lineBytes, m, wrapWidth, subStart)
 		if breakCol <= 0 {
 			// Can't break (e.g., single char wider than
 			// wrapWidth). Force at least 1 char.
@@ -102,39 +100,34 @@ func computeBreaks(
 	return breaks
 }
 
-// findBreakCol finds where to break sub (a suffix of lineBytes
-// starting at subStart). Returns a byte offset relative to sub.
+// findBreakCol finds where to break lineBytes starting at
+// subStart. Returns a byte offset relative to subStart.
 func findBreakCol(
-	sub []byte,
+	lineBytes []byte,
 	m *text.Measurer,
 	wrapWidth float32,
 	subStart int,
-	lineBytes []byte,
 ) int {
-	// Find the byte where we first exceed wrapWidth.
+	sub := lineBytes[subStart:]
 	// Use XForColumn on the full line for accuracy (tabs depend
 	// on absolute position).
-	baseX := m.XForColumn(lineBytes, subStart) // loop-invariant
+	baseX := m.XForColumn(lineBytes, subStart)
 	lastSpace := -1
 	for col := 1; col <= len(sub); col++ {
-		absCol := subStart + col
-		x := m.XForColumn(lineBytes, absCol) - baseX
+		x := m.XForColumn(lineBytes, subStart+col) - baseX
 		if x > wrapWidth {
-			// Exceeded. Break at last space if available.
 			if lastSpace > 0 {
 				return lastSpace
 			}
-			// Hard break at col-1 (last fitting char).
 			if col > 1 {
 				return col - 1
 			}
-			return col // at least 1
+			return col
 		}
 		if col < len(sub) && isWordBreak(sub[col]) {
-			lastSpace = col + 1 // break after the space
+			lastSpace = col + 1
 		}
 	}
-	// Entire sub fits (shouldn't happen if called correctly).
 	return len(sub)
 }
 
@@ -177,14 +170,7 @@ func totalVisualRowsForBuffer(
 			line = nextVisible(folds, line)
 			continue
 		}
-		lb := buf.Line(line)
-		lineW := m.XForColumn(lb, len(lb))
-		if lineW <= wrapWidth {
-			total++
-		} else {
-			breaks := computeBreaks(lb, m, wrapWidth)
-			total += len(breaks) + 1
-		}
+		total += wrapLineVisualRowCount(buf.Line(line), m, wrapWidth)
 		line++
 		if len(folds) > 0 {
 			line = nextVisible(folds, line)
@@ -240,21 +226,10 @@ func wrapLogicalToVisualRow(wm *wrapMap, line int) int {
 // wrapSubRowRange returns the [startCol, endCol) byte range for
 // sub-row sr of a line entry. sr=0 is the first sub-row.
 func wrapSubRowRange(we *wrapEntry, lineLen int, sr int) (int, int) {
-	if we == nil || lineLen < 0 {
+	if we == nil {
 		return 0, max(lineLen, 0)
 	}
-	if sr < 0 {
-		sr = 0
-	}
-	start := 0
-	if sr > 0 && sr <= len(we.BreakCols) {
-		start = we.BreakCols[sr-1]
-	}
-	end := lineLen
-	if sr < len(we.BreakCols) {
-		end = we.BreakCols[sr]
-	}
-	return start, end
+	return subRowByteRange(we.BreakCols, sr, lineLen)
 }
 
 // wrapEntryForLine returns the wrap entry for a logical line,
@@ -274,9 +249,9 @@ func wrapEntryForLine(wm *wrapMap, line int) *wrapEntry {
 	return nil
 }
 
-// resolveWrap returns true if wrapping is active, considering
-// the config and runtime override.
-func resolveWrap(cfg bool, override int) bool {
+// resolveBoolOverride applies a runtime override (0=use cfg,
+// 1=force on, 2=force off) to a config bool.
+func resolveBoolOverride(cfg bool, override int) bool {
 	switch override {
 	case 1:
 		return true

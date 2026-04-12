@@ -302,27 +302,8 @@ var defaultActions = map[string]Action{
 
 	// ---- bracket ----
 
-	"cursor.matchBracket": {
-		ID:        "cursor.matchBracket",
-		PerCursor: true,
-		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			p := st.primary()
-			if m, ok, _ := findMatchingBracket(buf, p.Cursor); ok {
-				p.Cursor = m
-			}
-		},
-	},
-	"select.matchBracket": {
-		ID:              "select.matchBracket",
-		PerCursor:       true,
-		PreservesAnchor: true,
-		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			p := st.primary()
-			if m, ok, _ := findMatchingBracket(buf, p.Cursor); ok {
-				p.Cursor = m
-			}
-		},
-	},
+	"cursor.matchBracket": matchBracketAction("cursor.matchBracket", false),
+	"select.matchBracket": matchBracketAction("select.matchBracket", true),
 
 	// ---- find ----
 
@@ -378,27 +359,13 @@ var defaultActions = map[string]Action{
 	"view.toggleStickyScroll": {
 		ID: "view.toggleStickyScroll",
 		Execute: func(_ EditorCfg, st *editorState, _ *buffer.Buffer, _ *gui.Window) {
-			switch st.StickyScrollOverride {
-			case 0:
-				st.StickyScrollOverride = 1
-			case 1:
-				st.StickyScrollOverride = 2
-			default:
-				st.StickyScrollOverride = 1
-			}
+			st.StickyScrollOverride = toggleOverride(st.StickyScrollOverride)
 		},
 	},
 	"view.toggleWrap": {
 		ID: "view.toggleWrap",
 		Execute: func(_ EditorCfg, st *editorState, _ *buffer.Buffer, _ *gui.Window) {
-			switch st.WrapOverride {
-			case 0:
-				st.WrapOverride = 1 // force on
-			case 1:
-				st.WrapOverride = 2 // force off
-			default:
-				st.WrapOverride = 1 // back to on
-			}
+			st.WrapOverride = toggleOverride(st.WrapOverride)
 		},
 	},
 	"view.toggleWhitespace": {
@@ -452,50 +419,45 @@ var defaultActions = map[string]Action{
 	},
 }
 
-// pageUpAction and pageDownAction need EditorCfg for viewport
-// height, so they're registered separately as closures.
-func pageUpAction(cfg EditorCfg, frame *editorFrameData) Action {
-	return Action{
-		ID:        "cursor.pageup",
-		PerCursor: true,
-		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveUp(st.primary(), buf, pageLines(frame, cfg.Height))
-		},
-		PreservesDesiredCol: true,
+// toggleOverride cycles a bool override: 0→1 (on), 1→2 (off),
+// *→1 (on).
+func toggleOverride(v int) int {
+	if v == 1 {
+		return 2
 	}
+	return 1
 }
 
-func pageDownAction(cfg EditorCfg, frame *editorFrameData) Action {
+// matchBracketAction builds a bracket-match action.
+func matchBracketAction(id string, preservesAnchor bool) Action {
 	return Action{
-		ID:        "cursor.pagedown",
-		PerCursor: true,
-		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveDown(st.primary(), buf, pageLines(frame, cfg.Height))
-		},
-		PreservesDesiredCol: true,
-	}
-}
-
-// selectPageUpAction and selectPageDownAction extend selection.
-func selectPageUpAction(cfg EditorCfg, frame *editorFrameData) Action {
-	return Action{
-		ID:              "select.pageup",
+		ID:              id,
 		PerCursor:       true,
-		PreservesAnchor: true,
+		PreservesAnchor: preservesAnchor,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveUp(st.primary(), buf, pageLines(frame, cfg.Height))
+			p := st.primary()
+			if _, m, ok, _ := findMatchingBracket(buf, p.Cursor); ok {
+				p.Cursor = m
+			}
 		},
-		PreservesDesiredCol: true,
 	}
 }
 
-func selectPageDownAction(cfg EditorCfg, frame *editorFrameData) Action {
+// pageAction builds a page-movement action. moveFn is moveUp or
+// moveDown; preservesAnchor distinguishes cursor vs select variants.
+func pageAction(
+	id string,
+	moveFn func(*CursorState, *buffer.Buffer, int),
+	preservesAnchor bool,
+	cfg EditorCfg,
+	frame *editorFrameData,
+) Action {
 	return Action{
-		ID:              "select.pagedown",
+		ID:              id,
 		PerCursor:       true,
-		PreservesAnchor: true,
+		PreservesAnchor: preservesAnchor,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveDown(st.primary(), buf, pageLines(frame, cfg.Height))
+			moveFn(st.primary(), buf, pageLines(frame, cfg.Height))
 		},
 		PreservesDesiredCol: true,
 	}

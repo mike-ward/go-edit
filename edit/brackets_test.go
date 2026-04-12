@@ -151,7 +151,7 @@ func TestFindMatchingBracket(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := bufFromLines(tt.lines...)
-			got, ok, capped := findMatchingBracket(buf, tt.cursor)
+			_, got, ok, capped := findMatchingBracket(buf, tt.cursor)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}
@@ -173,7 +173,7 @@ func TestBracketScanCap(t *testing.T) {
 		long[i] = 'x'
 	}
 	buf := bufFromLines(string(long))
-	_, ok, capped := findMatchingBracket(buf, buffer.Position{})
+	_, _, ok, capped := findMatchingBracket(buf, buffer.Position{})
 	if ok {
 		t.Fatal("expected no match beyond scan cap")
 	}
@@ -191,7 +191,7 @@ func TestBracketScanCap_BackwardDirection(t *testing.T) {
 	}
 	long[len(long)-1] = ')'
 	buf := bufFromLines(string(long))
-	_, ok, capped := findMatchingBracket(buf,
+	_, _, ok, capped := findMatchingBracket(buf,
 		buffer.Position{Line: 0, ByteCol: len(long) - 1})
 	if ok {
 		t.Fatal("expected no match for unbalanced closer")

@@ -782,18 +782,18 @@ func TestFilterToScope_AllInScope(t *testing.T) {
 
 func TestNeedsRecompute_DirtyFlag(t *testing.T) {
 	ss := &searchState{Query: "a", lastQuery: "a", lastFlags: 0}
-	if needsRecompute(ss) {
+	if ss.needsRecompute() {
 		t.Fatal("should not need recompute")
 	}
 	ss.matchesDirty = true
-	if !needsRecompute(ss) {
+	if !ss.needsRecompute() {
 		t.Fatal("dirty flag should trigger recompute")
 	}
 }
 
 func TestNeedsRecompute_QueryChanged(t *testing.T) {
 	ss := &searchState{Query: "b", lastQuery: "a"}
-	if !needsRecompute(ss) {
+	if !ss.needsRecompute() {
 		t.Fatal("query change should trigger recompute")
 	}
 }

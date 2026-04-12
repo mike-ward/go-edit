@@ -37,19 +37,14 @@ type Binding struct {
 
 // Keymap is an ordered list of bindings. First match wins.
 //
-// Bindings is authoritative and is also used by the help overlay
-// for ordered enumeration. A lookup map accelerates Resolve, built
-// eagerly by KeymapStack.Push so Resolve is lock-free and safe to
-// call concurrently on a constructed stack. Keymap is treated as
-// immutable after Push; callers that mutate Bindings must Push a
-// fresh Keymap or nil out lookup themselves.
+// Bindings is authoritative and also used by the help overlay for
+// ordered enumeration. A lookup map accelerates Resolve, built
+// eagerly by KeymapStack.Push. Keymap is immutable after Push.
 type Keymap struct {
 	Name     string
 	Bindings []Binding
 
-	// lookup is built by KeymapStack.Push from Bindings. nil
-	// means the Keymap has never been pushed; Resolve falls
-	// back to a linear scan to stay correct for ad-hoc test use.
+	// lookup is built by KeymapStack.Push from Bindings.
 	lookup map[uint32]string
 }
 
