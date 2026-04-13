@@ -7,7 +7,8 @@ import "github.com/mike-ward/go-edit/edit/buffer"
 type CursorState struct {
 	Cursor     buffer.Position
 	Anchor     buffer.Position // Anchor == Cursor → no selection
-	DesiredCol int             // sticky col for Up/Down movement
+	DesiredCol int             // sticky byte col for Up/Down (no wrap)
+	DesiredX   float32         // sticky pixel X for Up/Down (wrap)
 }
 
 // HasSelection reports whether this cursor has an active selection.

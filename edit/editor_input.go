@@ -90,8 +90,17 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 		stack.Push(km)
 	}
 
-	actions := make(map[string]Action, len(defaultActions)+4+len(cfg.Actions))
+	actions := make(map[string]Action, len(defaultActions)+8+len(cfg.Actions))
 	maps.Copy(actions, defaultActions)
+	// Up/Down actions need frame for wrap-aware movement.
+	for _, a := range []Action{
+		wrapAwareUpDown("cursor.up", false, frame),
+		wrapAwareUpDown("cursor.down", false, frame),
+		wrapAwareUpDown("select.up", true, frame),
+		wrapAwareUpDown("select.down", true, frame),
+	} {
+		actions[a.ID] = a
+	}
 	// Page actions need frame for viewport height.
 	for _, a := range []Action{
 		pageAction("cursor.pageup", moveUp, false, cfg, frame),
@@ -162,10 +171,10 @@ func editorOnKeyDown(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, *g
 		}
 
 		if action.PerCursor && len(st.Cursors) > 1 {
-			dispatchPerCursor(cfg, &st, cfg.Buffer, w, action, isEdit)
+			dispatchPerCursor(cfg, &st, cfg.Buffer, w, action, isEdit, frame)
 		} else {
 			action.Execute(cfg, &st, cfg.Buffer, w)
-			applyPostAction(&st, action)
+			applyPostAction(&st, action, cfg.Buffer, frame)
 		}
 
 		// Skip cursors past folded ranges after movement.
@@ -408,6 +417,146 @@ func clampCol(cs *CursorState, buf *buffer.Buffer) {
 	want := cs.DesiredCol
 	want = min(want, ll)
 	cs.Cursor.ByteCol = want
+}
+
+// moveUpVisual moves the cursor up by one visual (sub-)row when
+// soft-wrap is active. DesiredX (pixel offset within the sub-row)
+// is preserved across rows.
+func moveUpVisual(
+	cs *CursorState, buf *buffer.Buffer,
+	m *text.Measurer, wrapWidth float32, folds []FoldRange,
+) {
+	if m == nil || buf == nil || wrapWidth != wrapWidth ||
+		wrapWidth <= 0 {
+		return
+	}
+	cs.Cursor.Line = max(min(cs.Cursor.Line, buf.LineCount()-1), 0)
+	if cs.DesiredX == 0 || cs.DesiredX != cs.DesiredX {
+		cs.DesiredX = cursorDesiredX(cs, buf, m, wrapWidth)
+	}
+	lb := buf.Line(cs.Cursor.Line)
+	breaks := computeBreaks(lb, m, wrapWidth)
+	we := wrapEntry{BreakCols: breaks}
+	curSR := wrapCursorVisualRow(&we, cs.Cursor.ByteCol)
+
+	if curSR > 0 {
+		// Move to previous sub-row of the same logical line.
+		cs.Cursor.ByteCol = hitSubRow(
+			lb, &we, curSR-1, cs.DesiredX, m)
+		return
+	}
+
+	// Sub-row 0 — cross to previous visible line.
+	prev := cs.Cursor.Line - 1
+	if prev < 0 {
+		cs.Cursor.ByteCol = 0
+		return
+	}
+	if len(folds) > 0 {
+		prev = prevVisible(folds, prev)
+		if prev >= cs.Cursor.Line {
+			// Fold covers everything above.
+			cs.Cursor.Line = 0
+			cs.Cursor.ByteCol = 0
+			return
+		}
+	}
+	cs.Cursor.Line = prev
+	plb := buf.Line(prev)
+	pBreaks := computeBreaks(plb, m, wrapWidth)
+	pwe := wrapEntry{BreakCols: pBreaks}
+	lastSR := len(pBreaks)
+	cs.Cursor.ByteCol = hitSubRow(
+		plb, &pwe, lastSR, cs.DesiredX, m)
+}
+
+// moveDownVisual moves the cursor down by one visual (sub-)row.
+func moveDownVisual(
+	cs *CursorState, buf *buffer.Buffer,
+	m *text.Measurer, wrapWidth float32, folds []FoldRange,
+) {
+	if m == nil || buf == nil || wrapWidth != wrapWidth ||
+		wrapWidth <= 0 {
+		return
+	}
+	cs.Cursor.Line = max(min(cs.Cursor.Line, buf.LineCount()-1), 0)
+	if cs.DesiredX == 0 || cs.DesiredX != cs.DesiredX {
+		cs.DesiredX = cursorDesiredX(cs, buf, m, wrapWidth)
+	}
+	lb := buf.Line(cs.Cursor.Line)
+	breaks := computeBreaks(lb, m, wrapWidth)
+	we := wrapEntry{BreakCols: breaks}
+	curSR := wrapCursorVisualRow(&we, cs.Cursor.ByteCol)
+	lastSR := len(breaks)
+
+	if curSR < lastSR {
+		// Move to next sub-row of the same logical line.
+		cs.Cursor.ByteCol = hitSubRow(
+			lb, &we, curSR+1, cs.DesiredX, m)
+		return
+	}
+
+	// Last sub-row — cross to next visible line.
+	next := cs.Cursor.Line + 1
+	if next >= buf.LineCount() {
+		cs.Cursor.ByteCol = len(lb)
+		return
+	}
+	if len(folds) > 0 {
+		next = nextVisible(folds, next)
+		if next >= buf.LineCount() {
+			cs.Cursor.ByteCol = len(lb)
+			return
+		}
+	}
+	cs.Cursor.Line = next
+	nlb := buf.Line(next)
+	nBreaks := computeBreaks(nlb, m, wrapWidth)
+	nwe := wrapEntry{BreakCols: nBreaks}
+	cs.Cursor.ByteCol = hitSubRow(nlb, &nwe, 0, cs.DesiredX, m)
+}
+
+// hitSubRow converts a DesiredX pixel offset into a byte column
+// within the given sub-row. Uses the same slice+ColumnForX
+// pattern as mouse hit-testing.
+func hitSubRow(
+	lineBytes []byte, we *wrapEntry,
+	subRow int, desiredX float32, m *text.Measurer,
+) int {
+	if m == nil || subRow < 0 || desiredX != desiredX {
+		return 0
+	}
+	start, end := wrapSubRowRange(we, len(lineBytes), subRow)
+	col := m.ColumnForX(lineBytes[start:], desiredX)
+	col += start
+	if col > end {
+		col = end
+	}
+	return col
+}
+
+// cursorDesiredX computes the pixel X offset of the cursor within
+// its current visual sub-row.
+func cursorDesiredX(
+	cs *CursorState, buf *buffer.Buffer,
+	m *text.Measurer, wrapWidth float32,
+) float32 {
+	if m == nil || buf == nil || wrapWidth != wrapWidth ||
+		wrapWidth <= 0 {
+		return 0
+	}
+	line := max(min(cs.Cursor.Line, buf.LineCount()-1), 0)
+	lb := buf.Line(line)
+	col := max(min(cs.Cursor.ByteCol, len(lb)), 0)
+	breaks := computeBreaks(lb, m, wrapWidth)
+	we := wrapEntry{BreakCols: breaks}
+	sr := wrapCursorVisualRow(&we, col)
+	start, _ := wrapSubRowRange(&we, len(lb), sr)
+	off := col - start
+	if off < 0 {
+		off = 0
+	}
+	return m.XForColumn(lb[start:], off)
 }
 
 func backspace(

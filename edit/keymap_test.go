@@ -145,6 +145,10 @@ func TestDefaultKeymapCoversAllActions(t *testing.T) {
 	// defaultActions (page actions are added at runtime, so
 	// we check those IDs separately).
 	runtime := map[string]bool{
+		"cursor.up":       true,
+		"cursor.down":     true,
+		"select.up":       true,
+		"select.down":     true,
 		"cursor.pageup":   true,
 		"cursor.pagedown": true,
 		"select.pageup":   true,

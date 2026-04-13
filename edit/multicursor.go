@@ -111,6 +111,7 @@ func dispatchPerCursor(
 	w *gui.Window,
 	action Action,
 	isEdit bool,
+	frame *editorFrameData,
 ) {
 	if len(st.Cursors) == 0 {
 		return
@@ -143,7 +144,7 @@ func dispatchPerCursor(
 		}
 
 		action.Execute(cfg, st, buf, w)
-		applyPostAction(st, action)
+		applyPostAction(st, action, buf, frame)
 
 		if idx != 0 {
 			st.Cursors[0], st.Cursors[idx] = st.Cursors[idx], st.Cursors[0]
@@ -155,15 +156,24 @@ func dispatchPerCursor(
 	}
 }
 
-// applyPostAction applies anchor-collapse and desiredCol reset
-// to the primary cursor after action execution.
-func applyPostAction(st *editorState, action Action) {
+// applyPostAction applies anchor-collapse and desiredCol/desiredX
+// reset to the primary cursor after action execution.
+func applyPostAction(
+	st *editorState, action Action,
+	buf *buffer.Buffer, frame *editorFrameData,
+) {
 	p := st.primary()
 	if !action.PreservesAnchor {
 		p.Anchor = p.Cursor
 	}
 	if !action.PreservesDesiredCol {
 		p.DesiredCol = p.Cursor.ByteCol
+		if frame != nil && frame.wrapActive && buf != nil {
+			p.DesiredX = cursorDesiredX(
+				p, buf, st.Measurer, frame.wrapWidth)
+		} else {
+			p.DesiredX = 0
+		}
 	}
 }
 
@@ -222,6 +232,7 @@ func charInsertPerCursor(st *editorState, buf *buffer.Buffer, data []byte) {
 		cs.Cursor = c.AppliedRange.End
 		cs.ClearSelection()
 		cs.DesiredCol = cs.Cursor.ByteCol
+		cs.DesiredX = 0
 		return
 	}
 
@@ -247,6 +258,7 @@ func charInsertPerCursor(st *editorState, buf *buffer.Buffer, data []byte) {
 		cs.Cursor = c.AppliedRange.End
 		cs.ClearSelection()
 		cs.DesiredCol = cs.Cursor.ByteCol
+		cs.DesiredX = 0
 	}
 
 	remove()

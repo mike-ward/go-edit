@@ -322,7 +322,7 @@ func TestDispatchPerCursor_EmptyCursors(t *testing.T) {
 	buf := buffer.New()
 	dispatchPerCursor(EditorCfg{Buffer: buf}, &st, buf, nil,
 		Action{ID: "noop", Execute: func(_ EditorCfg, _ *editorState, _ *buffer.Buffer, _ *gui.Window) {}},
-		false)
+		false, nil)
 	// No panic = pass.
 }
 
@@ -851,5 +851,101 @@ func TestEditor_DrawVersion_ChangesOnScroll(t *testing.T) {
 	v2 := frame.drawVersion
 	if v1 == v2 {
 		t.Fatalf("drawVersion did not change after scroll: %d", v1)
+	}
+}
+
+// ---------- visual cursor movement ----------
+
+func TestMoveUpVisual_NilMeasurer(t *testing.T) {
+	buf := buffer.New()
+	cs := &CursorState{}
+	moveUpVisual(cs, buf, nil, 80, nil)
+	// No panic = pass.
+}
+
+func TestMoveDownVisual_NilBuffer(t *testing.T) {
+	cs := &CursorState{}
+	moveDownVisual(cs, nil, fakeMeasurer(), 80, nil)
+}
+
+func TestMoveUpVisual_NaNWrapWidth(t *testing.T) {
+	buf := buffer.New()
+	cs := &CursorState{}
+	moveUpVisual(cs, buf, fakeMeasurer(), float32(math.NaN()), nil)
+}
+
+func TestMoveDownVisual_ZeroWrapWidth(t *testing.T) {
+	buf := buffer.New()
+	cs := &CursorState{}
+	moveDownVisual(cs, buf, fakeMeasurer(), 0, nil)
+}
+
+func TestMoveUpVisual_NaNDesiredX(t *testing.T) {
+	m := fakeMeasurer()
+	buf := bufFromLines("01234567890123456789")
+	cs := &CursorState{
+		Cursor:   buffer.Position{Line: 0, ByteCol: 15},
+		DesiredX: float32(math.NaN()),
+	}
+	moveUpVisual(cs, buf, m, 80, nil)
+	// Should recover via lazy init, not panic.
+}
+
+func TestHitSubRow_NilMeasurer(t *testing.T) {
+	we := wrapEntry{BreakCols: []int{10}}
+	got := hitSubRow([]byte("01234567890123456789"), &we, 0, 24, nil)
+	if got != 0 {
+		t.Fatalf("hitSubRow(nil m) = %d, want 0", got)
+	}
+}
+
+func TestHitSubRow_NaNDesiredX(t *testing.T) {
+	m := fakeMeasurer()
+	we := wrapEntry{BreakCols: []int{10}}
+	got := hitSubRow([]byte("01234567890123456789"), &we,
+		0, float32(math.NaN()), m)
+	if got != 0 {
+		t.Fatalf("hitSubRow(NaN) = %d, want 0", got)
+	}
+}
+
+func TestCursorDesiredX_NilMeasurer(t *testing.T) {
+	buf := bufFromLines("hello")
+	cs := &CursorState{Cursor: buffer.Position{Line: 0, ByteCol: 3}}
+	got := cursorDesiredX(cs, buf, nil, 80)
+	if got != 0 {
+		t.Fatalf("cursorDesiredX(nil m) = %v, want 0", got)
+	}
+}
+
+func TestCursorDesiredX_NaNWrapWidth(t *testing.T) {
+	m := fakeMeasurer()
+	buf := bufFromLines("hello")
+	cs := &CursorState{Cursor: buffer.Position{Line: 0, ByteCol: 3}}
+	got := cursorDesiredX(cs, buf, m, float32(math.NaN()))
+	if got != 0 {
+		t.Fatalf("cursorDesiredX(NaN wrapWidth) = %v, want 0", got)
+	}
+}
+
+func TestCursorDesiredX_OutOfRangeLine(t *testing.T) {
+	m := fakeMeasurer()
+	buf := bufFromLines("hello")
+	cs := &CursorState{Cursor: buffer.Position{Line: 999, ByteCol: 0}}
+	// Should clamp line, not panic.
+	cursorDesiredX(cs, buf, m, 80)
+}
+
+func TestMoveUpVisual_OutOfRangeLine(t *testing.T) {
+	m := fakeMeasurer()
+	buf := bufFromLines("hello", "world")
+	cs := &CursorState{
+		Cursor:   buffer.Position{Line: 99, ByteCol: 0},
+		DesiredX: 8,
+	}
+	moveUpVisual(cs, buf, m, 80, nil)
+	// Should clamp line, not panic.
+	if cs.Cursor.Line < 0 || cs.Cursor.Line >= buf.LineCount() {
+		t.Fatalf("line out of range: %d", cs.Cursor.Line)
 	}
 }

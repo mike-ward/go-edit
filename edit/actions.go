@@ -39,22 +39,10 @@ var defaultActions = map[string]Action{
 			moveRight(p, buf, st.Measurer)
 		},
 	},
-	"cursor.up": {
-		ID:        "cursor.up",
-		PerCursor: true,
-		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveUp(st.primary(), buf, 1)
-		},
-		PreservesDesiredCol: true,
-	},
-	"cursor.down": {
-		ID:        "cursor.down",
-		PerCursor: true,
-		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveDown(st.primary(), buf, 1)
-		},
-		PreservesDesiredCol: true,
-	},
+	// cursor.up, cursor.down, select.up, select.down are
+	// registered as closure overrides in editorOnKeyDown so they
+	// can branch on frame.wrapActive.
+
 	"cursor.home": {
 		ID:        "cursor.home",
 		PerCursor: true,
@@ -87,24 +75,6 @@ var defaultActions = map[string]Action{
 		PreservesAnchor: true,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
 			moveRight(st.primary(), buf, st.Measurer)
-		},
-	},
-	"select.up": {
-		ID:                  "select.up",
-		PerCursor:           true,
-		PreservesAnchor:     true,
-		PreservesDesiredCol: true,
-		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveUp(st.primary(), buf, 1)
-		},
-	},
-	"select.down": {
-		ID:                  "select.down",
-		PerCursor:           true,
-		PreservesAnchor:     true,
-		PreservesDesiredCol: true,
-		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveDown(st.primary(), buf, 1)
 		},
 	},
 	"select.home": {
@@ -443,8 +413,44 @@ func matchBracketAction(id string, preservesAnchor bool) Action {
 	}
 }
 
+// wrapAwareUpDown builds a closure-based Up/Down action that
+// branches on frame.wrapActive: visual sub-row movement when
+// wrap is on, logical line movement otherwise.
+func wrapAwareUpDown(
+	id string,
+	preservesAnchor bool,
+	frame *editorFrameData,
+) Action {
+	isDown := id == "cursor.down" || id == "select.down"
+	return Action{
+		ID:              id,
+		PerCursor:       true,
+		PreservesAnchor: preservesAnchor,
+		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
+			p := st.primary()
+			if !frame.wrapActive {
+				if isDown {
+					moveDown(p, buf, 1)
+				} else {
+					moveUp(p, buf, 1)
+				}
+				return
+			}
+			if isDown {
+				moveDownVisual(p, buf, st.Measurer,
+					frame.wrapWidth, st.FoldedRanges)
+			} else {
+				moveUpVisual(p, buf, st.Measurer,
+					frame.wrapWidth, st.FoldedRanges)
+			}
+		},
+		PreservesDesiredCol: true,
+	}
+}
+
 // pageAction builds a page-movement action. moveFn is moveUp or
 // moveDown; preservesAnchor distinguishes cursor vs select variants.
+// When wrap is active, moves by visual rows instead of logical lines.
 func pageAction(
 	id string,
 	moveFn func(*CursorState, *buffer.Buffer, int),
@@ -452,12 +458,30 @@ func pageAction(
 	cfg EditorCfg,
 	frame *editorFrameData,
 ) Action {
+	isDown := id == "cursor.pagedown" || id == "select.pagedown"
 	return Action{
 		ID:              id,
 		PerCursor:       true,
 		PreservesAnchor: preservesAnchor,
 		Execute: func(_ EditorCfg, st *editorState, buf *buffer.Buffer, _ *gui.Window) {
-			moveFn(st.primary(), buf, pageLines(frame, cfg.Height))
+			n := pageLines(frame, cfg.Height)
+			p := st.primary()
+			if !frame.wrapActive {
+				moveFn(p, buf, n)
+				return
+			}
+			// Move by N visual rows (capped to prevent DoS from
+			// degenerate viewport/lineHeight combinations).
+			n = min(n, 1000)
+			for range n {
+				if isDown {
+					moveDownVisual(p, buf, st.Measurer,
+						frame.wrapWidth, st.FoldedRanges)
+				} else {
+					moveUpVisual(p, buf, st.Measurer,
+						frame.wrapWidth, st.FoldedRanges)
+				}
+			}
 		},
 		PreservesDesiredCol: true,
 	}

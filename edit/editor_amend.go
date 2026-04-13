@@ -198,10 +198,10 @@ func executePendingAction(
 	}
 	if action.PerCursor && len(st.Cursors) > 1 {
 		dispatchPerCursor(cfg, st, cfg.Buffer, w,
-			action, isEdit)
+			action, isEdit, frame)
 	} else {
 		action.Execute(cfg, st, cfg.Buffer, w)
-		applyPostAction(st, action)
+		applyPostAction(st, action, cfg.Buffer, frame)
 	}
 	sortAndMerge(st)
 	if cfg.EnableFolding && len(st.FoldedRanges) > 0 {
