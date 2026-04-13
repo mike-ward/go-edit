@@ -38,6 +38,10 @@ type EditorCfg struct {
 	Decorations      []DecorationProvider
 	Keymaps          []*Keymap         // pushed on top of DefaultKeymap
 	Actions          map[string]Action // additional/override actions
+	// OnFileDrop is called when a file is dragged and dropped
+	// onto the editor.
+	OnFileDrop func(path string, w *gui.Window)
+
 	// OnInvalidate is called once with a RequestRedraw thunk.
 	// Decoration providers that do background work should store
 	// the thunk and call it when new data is ready.
@@ -204,9 +208,26 @@ func Editor(cfg EditorCfg) gui.View {
 		A11YState:   a11yState,
 		OnKeyDown:   editorOnKeyDown(cfg, frame),
 		OnChar:      editorOnChar(cfg, frame),
+		OnFileDrop:  editorOnFileDrop(cfg),
 		AmendLayout: editorAmendLayout(cfg, frame),
 		Content:     []gui.View{canvas, cursorOverlay},
 	})
+}
+
+// editorOnFileDrop returns the OnFileDrop callback for the root
+// container. Returns nil when cfg.OnFileDrop is unset.
+func editorOnFileDrop(cfg EditorCfg) func(*gui.Layout, *gui.Event, *gui.Window) {
+	if cfg.OnFileDrop == nil {
+		return nil
+	}
+	cb := cfg.OnFileDrop
+	return func(_ *gui.Layout, e *gui.Event, w *gui.Window) {
+		if e.FilePath == "" {
+			return
+		}
+		cb(e.FilePath, w)
+		e.IsHandled = true
+	}
 }
 
 // editorA11YLabel returns an accessibility label from the

@@ -397,10 +397,10 @@ Architectural notes:
 
 ### Phase 8 — Polish  ☑
 
-- [ ] Drag-and-drop file open. **Blocked**: go-gui has
-      `EventFilesDropped` but no `OnFileDrop` handler in
-      EventHandlers/DrawCanvasCfg/ContainerCfg. Needs upstream push.
-      Carried to Phase 9.
+- [x] Drag-and-drop file open. Upstream push: added `OnFileDrop`
+      to go-gui `EventHandlers`/`DrawCanvasCfg`/`ContainerCfg`,
+      `FilePath` field on `Event`, SDL2 `DropEvent` mapping,
+      `fileDropHandler` dispatch with mouse hit-test.
 - [x] Per-language config (tab width, comment string).
 - [x] Diagnostics gutter API (markers, squiggles) — no LSP yet, just an API
       surface for callers to push markers.
@@ -505,12 +505,11 @@ recommended sequence.
           target. Likely in highlighter `Decorate`, decoration
           sorting, or `renderStyledLine` per-span allocation.
       (e) No upstream go-gui push needed for rendering perf.
-- [ ] Soft-wrap cursor column math. Audit desired-column tracking
+- [x] Soft-wrap cursor column math. Audit desired-column tracking
       across wrapped rows — Up/Down across a wrapped line resets
       to logical col. Resolves open question.
-- [ ] Drag-and-drop file open. **Blocked** on go-gui upstream
-      (`OnFileDrop` handler missing on EventHandlers/DrawCanvasCfg/
-      ContainerCfg). Carried from Phase 8.
+- [x] Drag-and-drop file open. Wired via `EditorCfg.OnFileDrop`;
+      npad prompts save on dirty buffer before loading dropped file.
 
 ### Phase 10 — Substrate consumers
 

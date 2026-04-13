@@ -216,6 +216,16 @@ func mainView(w *gui.Window) gui.View {
 		LangConfigs:      langConfigs,
 		Theme:            editorTheme(s),
 		Decorations:      decos,
+		OnFileDrop: func(path string, w *gui.Window) {
+			s := gui.State[appState](w)
+			if s.Buf.Dirty() {
+				confirmSave(w, "Save changes before opening dropped file?", func(w *gui.Window) {
+					openFile(w, path)
+				})
+				return
+			}
+			openFile(w, path)
+		},
 		OnInvalidate: func(redraw func()) {
 			if s.HL != nil {
 				s.HL.SetInvalidateFunc(redraw)

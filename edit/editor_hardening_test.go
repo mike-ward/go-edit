@@ -949,3 +949,44 @@ func TestMoveUpVisual_OutOfRangeLine(t *testing.T) {
 		t.Fatalf("line out of range: %d", cs.Cursor.Line)
 	}
 }
+
+// ---------- OnFileDrop ----------
+
+func TestEditorOnFileDrop_NilCallbackReturnsNil(t *testing.T) {
+	fn := editorOnFileDrop(EditorCfg{})
+	if fn != nil {
+		t.Fatal("expected nil when OnFileDrop not set")
+	}
+}
+
+func TestEditorOnFileDrop_EmptyPathSkipsCallback(t *testing.T) {
+	called := false
+	cfg := EditorCfg{
+		OnFileDrop: func(_ string, _ *gui.Window) { called = true },
+	}
+	fn := editorOnFileDrop(cfg)
+	e := &gui.Event{FilePath: ""}
+	fn(nil, e, nil)
+	if called {
+		t.Fatal("callback invoked for empty path")
+	}
+	if e.IsHandled {
+		t.Fatal("IsHandled set for empty path")
+	}
+}
+
+func TestEditorOnFileDrop_ValidPathInvokesCallback(t *testing.T) {
+	var got string
+	cfg := EditorCfg{
+		OnFileDrop: func(path string, _ *gui.Window) { got = path },
+	}
+	fn := editorOnFileDrop(cfg)
+	e := &gui.Event{FilePath: "/tmp/test.txt"}
+	fn(nil, e, nil)
+	if got != "/tmp/test.txt" {
+		t.Fatalf("got %q, want /tmp/test.txt", got)
+	}
+	if !e.IsHandled {
+		t.Fatal("IsHandled not set")
+	}
+}
