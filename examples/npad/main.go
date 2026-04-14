@@ -155,7 +155,7 @@ func windowTitle(s *appState) string {
 	if s.Buf.Dirty() {
 		return fmt.Sprintf("npad — %s [modified]", name)
 	}
-	return fmt.Sprintf("npad — %s", name)
+	return "npad — " + name
 }
 
 // createHighlighter builds a Highlighter for the current buffer

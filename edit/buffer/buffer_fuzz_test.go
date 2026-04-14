@@ -26,7 +26,7 @@ func FuzzBufferApply(f *testing.F) {
 	) {
 		b := FromBytes(initial)
 		// Invariant: every line fits the cap after load.
-		for i := 0; i < b.LineCount(); i++ {
+		for i := range b.LineCount() {
 			if len(b.Line(i)) > MaxLineBytes {
 				t.Fatalf("load produced line %d len %d > %d",
 					i, len(b.Line(i)), MaxLineBytes)
@@ -38,7 +38,7 @@ func FuzzBufferApply(f *testing.F) {
 		})
 		// Invariant: Apply never produces an over-limit line
 		// (rejected edits leave buffer unchanged).
-		for i := 0; i < b.LineCount(); i++ {
+		for i := range b.LineCount() {
 			if len(b.Line(i)) > MaxLineBytes {
 				t.Fatalf("apply left line %d len %d > %d",
 					i, len(b.Line(i)), MaxLineBytes)

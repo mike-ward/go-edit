@@ -38,6 +38,58 @@ func TestDecorate_InvertedViewport(t *testing.T) {
 	}
 }
 
+// TestRetokenize_ShrinkThenGrow_NoStaleTokens validates the
+// token-backing reuse path: tokenize a token-heavy line, edit
+// it down to fewer tokens, then tokenize again and assert no
+// stale tokens from the earlier (longer) pass surface.
+func TestRetokenize_ShrinkThenGrow_NoStaleTokens(t *testing.T) {
+	initial := "package p\nfunc f() { a + b + c + d + e + f + g }\n"
+	buf := buffer.FromBytes([]byte(initial))
+	buf.Props.FilePath = "test.go"
+	h := New(buf, "", nil)
+	if h == nil {
+		t.Skip("no Go lexer")
+	}
+	defer h.Close()
+
+	vp := buffer.Viewport{FirstLine: 0, LastLine: buf.LineCount() - 1}
+	_ = h.Decorate(vp, nil)
+
+	// Replace line 1 content with a short, 1-2 token body.
+	line1 := buf.Line(1)
+	buf.Apply(buffer.Edit{
+		Range: buffer.Range{
+			Start: buffer.Position{Line: 1, ByteCol: 0},
+			End:   buffer.Position{Line: 1, ByteCol: len(line1)},
+		},
+		NewBytes: []byte("x"),
+	})
+	decos := h.Decorate(vp, nil)
+
+	// No decoration on line 1 may extend beyond len("x") = 1.
+	for _, d := range decos {
+		if d.Range.Start.Line != 1 && d.Range.End.Line != 1 {
+			continue
+		}
+		if d.Range.Start.ByteCol > 1 || d.Range.End.ByteCol > 1 {
+			t.Fatalf("stale decoration on shrunken line: %+v", d)
+		}
+	}
+
+	// Now grow back and ensure retokenize still produces tokens.
+	buf.Apply(buffer.Edit{
+		Range: buffer.Range{
+			Start: buffer.Position{Line: 1, ByteCol: 1},
+			End:   buffer.Position{Line: 1, ByteCol: 1},
+		},
+		NewBytes: []byte(" + y + z"),
+	})
+	decos = h.Decorate(vp, nil)
+	if len(decos) == 0 {
+		t.Fatal("expected tokens after regrow, got 0")
+	}
+}
+
 func TestClose_StopsObserver(t *testing.T) {
 	buf := buffer.FromBytes([]byte("var x = 1"))
 	buf.Props.FilePath = "test.go"

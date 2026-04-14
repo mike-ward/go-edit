@@ -14,9 +14,17 @@ linters:
     - modernize
     - unused
     - revive
+    - perfsprint
+    - gocritic
   settings:
     gocyclo:
       min-complexity: 30
+    gocritic:
+      disabled-checks:
+        # Compound conditions are more readable as if-else chains
+        # than a top-level switch. Disabled to avoid churn on
+        # existing wrap/fold dispatch patterns.
+        - ifElseChain
     revive:
       rules:
         - name: exported

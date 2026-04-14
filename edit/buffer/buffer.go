@@ -2,6 +2,7 @@ package buffer
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -103,7 +104,7 @@ func Load(r io.Reader) (*Buffer, error) {
 // with Props.FilePath, FileMode, and ModTime populated from stat.
 func LoadFile(path string) (*Buffer, error) {
 	if path == "" {
-		return nil, fmt.Errorf("buffer: empty file path")
+		return nil, errors.New("buffer: empty file path")
 	}
 	f, err := os.Open(path)
 	if err != nil {

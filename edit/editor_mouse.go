@@ -403,11 +403,9 @@ func handleHorizScrollbarClick(
 
 	if hasThumb && clickX >= thumbY && clickX < thumbY+thumbH {
 		startHorizScrollbarDrag(cfg, frame, w, clickX-thumbY)
-	} else {
-		if maxScrollX > 0 {
-			st.ScrollX = clickX / trackW * maxScrollX
-			clampScrollX(st, maxScrollX)
-		}
+	} else if maxScrollX > 0 {
+		st.ScrollX = clickX / trackW * maxScrollX
+		clampScrollX(st, maxScrollX)
 	}
 }
 

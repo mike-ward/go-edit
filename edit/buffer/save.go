@@ -2,6 +2,7 @@ package buffer
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,7 +17,7 @@ func (b *Buffer) SaveFile(path string) error {
 		path = b.Props.FilePath
 	}
 	if path == "" {
-		return fmt.Errorf("buffer: no file path")
+		return errors.New("buffer: no file path")
 	}
 
 	var buf bytes.Buffer
@@ -47,7 +48,7 @@ func (b *Buffer) SaveFile(path string) error {
 // conversion, and encoding. Implements io.WriterTo.
 func (b *Buffer) WriteTo(w io.Writer) (int64, error) {
 	if w == nil {
-		return 0, fmt.Errorf("buffer: nil writer")
+		return 0, errors.New("buffer: nil writer")
 	}
 	data := b.Bytes()
 	data = b.applySavePolicies(data)

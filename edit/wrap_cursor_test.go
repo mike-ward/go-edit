@@ -421,10 +421,10 @@ func TestCharInsertPerCursor_MultiCursor_ResetsDesiredX(t *testing.T) {
 	st := editorState{Measurer: fakeMeasurer()}
 	st.Cursors = []CursorState{
 		{Cursor: buffer.Position{Line: 0, ByteCol: 1},
-			Anchor: buffer.Position{Line: 0, ByteCol: 1},
+			Anchor:   buffer.Position{Line: 0, ByteCol: 1},
 			DesiredX: 50},
 		{Cursor: buffer.Position{Line: 1, ByteCol: 1},
-			Anchor: buffer.Position{Line: 1, ByteCol: 1},
+			Anchor:   buffer.Position{Line: 1, ByteCol: 1},
 			DesiredX: 60},
 	}
 	charInsertPerCursor(&st, buf, []byte("z"))

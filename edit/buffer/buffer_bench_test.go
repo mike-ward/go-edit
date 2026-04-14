@@ -55,7 +55,7 @@ func BenchmarkLineIter100k(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		total := 0
-		for i := 0; i < buf.LineCount(); i++ {
+		for i := range buf.LineCount() {
 			total += len(buf.Line(i))
 		}
 		_ = total

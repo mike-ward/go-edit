@@ -254,7 +254,7 @@ func (h *Highlighter) retokenizeFrom(from int) {
 		h.tokens = resizeSlice(h.tokens, lc)
 		h.lineContinues = resizeSlice(h.lineContinues, lc)
 		for i := from; i < stopLine; i++ {
-			h.tokens[i] = nil
+			h.tokens[i] = h.tokens[i][:0]
 			h.lineContinues[i] = false
 		}
 		return
@@ -263,10 +263,12 @@ func (h *Highlighter) retokenizeFrom(from int) {
 	// Prepare cache slots from `from` to `stopLine`. Lines beyond
 	// stopLine keep their existing cached tokens so previously
 	// highlighted off-screen text doesn't flash to default coloring.
+	// Reset len to 0 but retain capacity — tokenize-append below
+	// reuses the backing array, cutting per-edit token allocs.
 	h.tokens = resizeSlice(h.tokens, lc)
 	h.lineContinues = resizeSlice(h.lineContinues, lc)
 	for i := from; i < stopLine; i++ {
-		h.tokens[i] = nil
+		h.tokens[i] = h.tokens[i][:0]
 		h.lineContinues[i] = false
 	}
 

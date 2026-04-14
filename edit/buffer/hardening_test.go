@@ -19,7 +19,7 @@ func (r *repeatReader) Read(p []byte) (int, error) {
 	}
 	n := len(p)
 	n = min(n, r.n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		p[i] = r.b
 	}
 	r.n -= n
@@ -292,7 +292,7 @@ func TestApply_AcceptsMultiSegmentAtExactLimit(t *testing.T) {
 	if b.LineCount() != 2 {
 		t.Errorf("LineCount = %d, want 2", b.LineCount())
 	}
-	for i := 0; i < b.LineCount(); i++ {
+	for i := range b.LineCount() {
 		if len(b.Line(i)) != MaxLineBytes {
 			t.Errorf("line %d len = %d, want %d",
 				i, len(b.Line(i)), MaxLineBytes)

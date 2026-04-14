@@ -252,8 +252,16 @@ func (m *Measurer) PrevCursorPos(
 }
 
 func (m *Measurer) tabWidth() int {
-	if m.TabWidth > 0 {
-		return m.TabWidth
+	return normalizeTabWidth(m.TabWidth)
+}
+
+// normalizeTabWidth returns tw when positive, else DefaultTabWidth.
+// Public VisualCols/ExpandTabs* accept tabWidth from untrusted
+// callers (config, fuzz, tests); non-positive values would cause
+// div-by-zero in the tab-stop arithmetic.
+func normalizeTabWidth(tw int) int {
+	if tw > 0 {
+		return tw
 	}
 	return DefaultTabWidth
 }
@@ -261,7 +269,16 @@ func (m *Measurer) tabWidth() int {
 // VisualCols returns the number of visual columns occupied by
 // p[:byteCol], expanding tabs to tab stops. Iterates by rune
 // so multi-byte UTF-8 sequences count as one visual column.
+// byteCol is clamped to [0, len(p)]; tabWidth <= 0 falls back
+// to DefaultTabWidth.
 func VisualCols(p []byte, byteCol, tabWidth int) int {
+	if byteCol <= 0 {
+		return 0
+	}
+	if byteCol > len(p) {
+		byteCol = len(p)
+	}
+	tabWidth = normalizeTabWidth(tabWidth)
 	vcol := 0
 	for i := 0; i < byteCol; {
 		r, sz := utf8.DecodeRune(p[i:])
@@ -283,8 +300,10 @@ func VisualCols(p []byte, byteCol, tabWidth int) int {
 
 // byteColForVisualCol returns the byte column at or just past the
 // given visual column, expanding tabs to tab stops. Iterates by
-// rune so multi-byte UTF-8 sequences are not split.
+// rune so multi-byte UTF-8 sequences are not split. tabWidth <= 0
+// falls back to DefaultTabWidth.
 func byteColForVisualCol(p []byte, targetVCol, tabWidth int) int {
+	tabWidth = normalizeTabWidth(tabWidth)
 	vcol := 0
 	for i := 0; i < len(p); {
 		if vcol >= targetVCol {
@@ -316,9 +335,7 @@ func ExpandTabs(line []byte, tabWidth int) string {
 // given visual column. Used for rendering individual spans where
 // the starting visual column affects tab-stop alignment.
 func ExpandTabsSpan(span []byte, startVCol, tabWidth int) string {
-	if tabWidth <= 0 {
-		tabWidth = DefaultTabWidth
-	}
+	tabWidth = normalizeTabWidth(tabWidth)
 	if !slices.Contains(span, '\t') {
 		return string(span)
 	}

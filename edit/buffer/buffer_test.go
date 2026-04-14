@@ -292,7 +292,7 @@ func checkInvariants(t *testing.T, b *Buffer, step int) {
 			step, b.LineCount(), wantLines, s)
 	}
 	sum := 0
-	for i := 0; i < b.LineCount(); i++ {
+	for i := range b.LineCount() {
 		sum += len(b.Line(i))
 	}
 	wantSum := len(s) - (wantLines - 1)

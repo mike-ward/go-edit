@@ -552,10 +552,7 @@ func cursorDesiredX(
 	we := wrapEntry{BreakCols: breaks}
 	sr := wrapCursorVisualRow(&we, col)
 	start, _ := wrapSubRowRange(&we, len(lb), sr)
-	off := col - start
-	if off < 0 {
-		off = 0
-	}
+	off := max(col-start, 0)
 	return m.XForColumn(lb[start:], off)
 }
 
