@@ -144,6 +144,13 @@ func (m *Measurer) XForColumn(lineBytes []byte, byteCol int) float32 {
 	if byteCol > len(lineBytes) {
 		byteCol = len(lineBytes)
 	}
+	// Lines with tabs: go-glyph/Pango uses its own tab stops (typically
+	// 8) which disagrees with the editor's configured TabWidth. Use the
+	// monospace VisualCols path so positions match ExpandTabs rendering.
+	if slices.Contains(lineBytes[:byteCol], '\t') {
+		vcols := VisualCols(lineBytes, byteCol, m.tabWidth())
+		return float32(vcols) * m.advance
+	}
 	layout, ok := m.layoutCached(lineBytes)
 	if ok {
 		cp, cpOK := layout.GetCursorPos(byteCol)
@@ -164,15 +171,18 @@ func (m *Measurer) ColumnForX(lineBytes []byte, x float32) int {
 	if m == nil || x != x || x <= 0 { // x != x traps NaN
 		return 0
 	}
-	layout, ok := m.layoutCached(lineBytes)
-	if ok {
-		idx := layout.HitTest(x, m.lineHeight/2)
-		if idx < 0 {
-			return len(lineBytes)
+	// Lines with tabs: Pango's tab stops disagree with TabWidth, so the
+	// layout path would give wrong hit positions. Skip to the advance
+	// path so results match ExpandTabs rendering.
+	if !slices.Contains(lineBytes, '\t') {
+		if layout, ok := m.layoutCached(lineBytes); ok {
+			idx := layout.HitTest(x, m.lineHeight/2)
+			if idx < 0 {
+				return len(lineBytes)
+			}
+			return idx
 		}
-		return idx
 	}
-	// Fallback (headless): advance-based with tab awareness.
 	if m.advance <= 0 {
 		return 0
 	}

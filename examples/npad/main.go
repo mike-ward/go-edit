@@ -45,6 +45,11 @@ type appState struct {
 
 	ChromaStyleIdx int
 	RecentFiles    []string
+
+	// closing is true while a save/discard/cancel dialog spawned by
+	// OnCloseRequest is open; suppresses stacked dialogs from
+	// repeated close attempts.
+	closing bool
 }
 
 // chromaStyleNames is populated at init from chroma's registry.
@@ -132,6 +137,54 @@ func main() {
 			rebuildMenu(s, w)
 			w.UpdateView(mainView)
 			w.SetIDFocus(focusEditor)
+		},
+		OnCloseRequest: func(w *gui.Window) {
+			s := gui.State[appState](w)
+			switch decideClose(s) {
+			case closeIgnore:
+				return
+			case closeNow:
+				w.Close()
+				return
+			}
+			s.closing = true
+			w.NativeSaveDiscardDialog(gui.NativeSaveDiscardDialogCfg{
+				Title: "Unsaved Changes",
+				Body:  "Save changes before closing?",
+				Level: gui.AlertWarning,
+				OnDone: func(r gui.NativeAlertResult, w *gui.Window) {
+					s := gui.State[appState](w)
+					s.closing = false
+					switch r.Status {
+					case gui.DialogOK:
+						if s.FilePath != "" {
+							doSave(w, s.FilePath)
+							// doSave shows an error dialog and leaves
+							// the buffer dirty on failure; keep the
+							// window open so the user can retry.
+							if shouldFinishClose(s) {
+								w.Close()
+							}
+							return
+						}
+						w.NativeSaveDialog(gui.NativeSaveDialogCfg{
+							Title:            "Save As",
+							ConfirmOverwrite: true,
+							OnDone: func(r gui.NativeDialogResult, w *gui.Window) {
+								if r.Status != gui.DialogOK || len(r.Paths) == 0 {
+									return
+								}
+								doSave(w, r.Paths[0].Path)
+								if shouldFinishClose(s) {
+									w.Close()
+								}
+							},
+						})
+					case gui.DialogDiscard:
+						w.Close()
+					}
+				},
+			})
 		},
 	})
 
