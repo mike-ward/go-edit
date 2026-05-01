@@ -488,10 +488,13 @@ func (b *Buffer) insertAt(pos Position, p []byte) Position {
 	}
 	mid = append(mid, newLast)
 
-	// Splice mid after pos.Line.
-	tailLines := append([]*line{}, b.lines[pos.Line+1:]...)
-	b.lines = append(b.lines[:pos.Line+1], mid...)
-	b.lines = append(b.lines, tailLines...)
+	// Splice mid after pos.Line without copying tail into a temporary slice.
+	insertCount := len(mid)
+	insertAt := pos.Line + 1
+	oldLen := len(b.lines)
+	b.lines = append(b.lines, make([]*line, insertCount)...)
+	copy(b.lines[insertAt+insertCount:], b.lines[insertAt:oldLen])
+	copy(b.lines[insertAt:], mid)
 
 	return Position{
 		Line:    pos.Line + len(segs) - 1,

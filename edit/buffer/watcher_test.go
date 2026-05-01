@@ -63,6 +63,11 @@ func TestWatcherDeleted(t *testing.T) {
 	if events[0].Kind != WatchDeleted {
 		t.Errorf("kind = %d, want WatchDeleted", events[0].Kind)
 	}
+
+	clock = clock.Add(2 * time.Second)
+	if events := w.Check(); len(events) != 0 {
+		t.Fatalf("expected delete to be emitted once, got %d events", len(events))
+	}
 }
 
 func TestWatcherThrottle(t *testing.T) {
@@ -106,5 +111,43 @@ func TestWatcherUnwatch(t *testing.T) {
 	clock = clock.Add(2 * time.Second)
 	if events := w.Check(); len(events) != 0 {
 		t.Fatalf("expected no events after unwatch, got %d", len(events))
+	}
+}
+
+func TestWatcherModifiedSameMTimeDifferentSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "watched.txt")
+	if err := os.WriteFile(path, []byte("abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clock := info.ModTime()
+	w := NewWatcher(func() time.Time { return clock })
+	w.Watch(path, info.ModTime())
+
+	clock = clock.Add(2 * time.Second)
+	if events := w.Check(); len(events) != 0 {
+		t.Fatalf("unexpected initial events: %v", events)
+	}
+
+	// Force a size-only change and restore mtime to simulate coarse filesystems.
+	if err := os.WriteFile(path, []byte("abcdef"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	clock = clock.Add(2 * time.Second)
+	events := w.Check()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Kind != WatchModified {
+		t.Fatalf("kind = %d, want WatchModified", events[0].Kind)
 	}
 }

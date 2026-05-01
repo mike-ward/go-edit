@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.10.1 — 2026-05-01
+
+- buffer/watcher: emit `WatchDeleted` once and unwatch missing paths.
+- buffer/watcher: detect external edits by `(modTime, size)`.
+- buffer/save: stream `(*Buffer).WriteTo` via `io.Copy`; surface short
+  writes as `io.ErrShortWrite`.
+- buffer/save: snapshot + recheck symlink target before atomic commit;
+  fail on mid-save target changes.
+- buffer: cut multiline insert allocations via in-place splice.
+
 ## v0.10.0 — 2026-04-30
 
 - editor: harden `EditorCfg.Font` override. Empty `Family` borrows

@@ -22,6 +22,7 @@ type WatchEvent struct {
 
 type watchEntry struct {
 	modTime time.Time
+	size    int64
 }
 
 // watchInterval is the minimum time between successive Check calls
@@ -54,7 +55,11 @@ func (w *Watcher) Watch(path string, modTime time.Time) {
 	if path == "" {
 		return
 	}
-	w.entries[path] = watchEntry{modTime: modTime}
+	entry := watchEntry{modTime: modTime, size: -1}
+	if info, err := os.Stat(path); err == nil {
+		entry.size = info.Size()
+	}
+	w.entries[path] = entry
 }
 
 // Unwatch removes path from change detection.
@@ -80,15 +85,20 @@ func (w *Watcher) Check() []WatchEvent {
 				events = append(events, WatchEvent{
 					Path: path, Kind: WatchDeleted,
 				})
+				// Emit delete once; callers should re-register if recreated.
+				delete(w.entries, path)
 			}
 			continue
 		}
-		if info.ModTime() != entry.modTime {
+		if info.ModTime() != entry.modTime || entry.size != info.Size() {
 			events = append(events, WatchEvent{
 				Path: path, Kind: WatchModified,
 			})
 			// Update so the same change isn't reported twice.
-			w.entries[path] = watchEntry{modTime: info.ModTime()}
+			w.entries[path] = watchEntry{
+				modTime: info.ModTime(),
+				size:    info.Size(),
+			}
 		}
 	}
 	return events

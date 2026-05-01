@@ -2,6 +2,8 @@ package buffer
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -201,6 +203,28 @@ func TestTrimTrailingWS_EdgeCases(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return 1, nil
+}
+
+func TestWriteToShortWrite(t *testing.T) {
+	b := FromBytes([]byte("hello"))
+	b.Props.FinalNewline = false
+
+	n, err := b.WriteTo(shortWriter{})
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("err = %v, want %v", err, io.ErrShortWrite)
+	}
+	if n != 1 {
+		t.Fatalf("n = %d, want 1", n)
 	}
 }
 

@@ -99,3 +99,37 @@ func TestAtomicWriteSymlink(t *testing.T) {
 		t.Error("link is no longer a symlink")
 	}
 }
+
+func TestSymlinkSnapshotDetectsRetarget(t *testing.T) {
+	dir := t.TempDir()
+	targetA := filepath.Join(dir, "target-a.txt")
+	targetB := filepath.Join(dir, "target-b.txt")
+	link := filepath.Join(dir, "link.txt")
+	if err := os.WriteFile(targetA, []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetB, []byte("b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetA, link); err != nil {
+		t.Skip("symlinks not supported:", err)
+	}
+
+	first, err := symlinkSnapshot(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetB, link); err != nil {
+		t.Fatal(err)
+	}
+	second, err := symlinkSnapshot(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("expected symlink snapshot to change after retarget")
+	}
+}

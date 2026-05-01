@@ -1,6 +1,7 @@
 package buffer
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,10 +13,11 @@ import (
 // target file is replaced, not the link.
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	// Resolve symlinks to write to the real target.
-	resolved, err := resolveSymlink(path)
+	initial, err := symlinkSnapshot(path)
 	if err != nil {
 		return err
 	}
+	resolved := initial.resolved
 	dir := filepath.Dir(resolved)
 
 	tmp, err := os.CreateTemp(dir, ".go-edit-*.tmp")
@@ -50,12 +52,47 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 		_ = os.Chmod(tmpName, mode)
 	}
 
+	current, err := symlinkSnapshot(path)
+	if err != nil {
+		return fmt.Errorf("buffer: recheck symlink: %w", err)
+	}
+	if initial != current {
+		return errors.New("buffer: save target changed during write")
+	}
+
 	if err := os.Rename(tmpName, resolved); err != nil {
+		if initial.isSymlink {
+			return fmt.Errorf("buffer: replace symlink target: %w", err)
+		}
 		// Fallback: direct write (non-atomic).
 		return directWrite(resolved, data, mode)
 	}
 	success = true
 	return nil
+}
+
+type symlinkState struct {
+	resolved  string
+	isSymlink bool
+}
+
+func symlinkSnapshot(path string) (symlinkState, error) {
+	resolved, err := resolveSymlink(path)
+	if err != nil {
+		return symlinkState{}, err
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return symlinkState{resolved: resolved}, nil
+		}
+		return symlinkState{}, err
+	}
+	return symlinkState{
+		resolved:  resolved,
+		isSymlink: info.Mode()&os.ModeSymlink != 0,
+	}, nil
 }
 
 // resolveSymlink returns the target of path if it is a symlink,

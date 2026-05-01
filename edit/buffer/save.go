@@ -66,7 +66,7 @@ func (b *Buffer) WriteTo(w io.Writer) (int64, error) {
 		return 0, fmt.Errorf("buffer: encode: %w", err)
 	}
 
-	n, err := w.Write(encoded)
+	n, err := io.Copy(w, bytes.NewReader(encoded))
 	return int64(n), err
 }
 
