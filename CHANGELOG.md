@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.10.2 — 2026-05-17
+
+- deps: bump go-gui to v0.19.1 (scroll phase bridge, context menu focus fix).
+- deps: bump go-gui to v0.19.0, go-glyph to v1.7.1 (animation heartbeat,
+  Metal autorelease fix).
+- lint: use `slices.Backward` for reverse loops in undo and fold.
+
 ## v0.10.1 — 2026-05-01
 
 - buffer/watcher: emit `WatchDeleted` once and unwatch missing paths.
