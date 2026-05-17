@@ -79,7 +79,7 @@ func drawHorizScrollbar(
 	dc.FilledRect(trackX, trackY, trackW, scrollbarWidth, rt.scrollbarTrack)
 
 	textAreaW := cfg.Width - frame.gutterW - frame.padLeft
-	contentW := frame.maxContentW
+	contentW := frame.maxContentW + cursorScrollPad
 	// Reuse scrollbarGeometry: map content→track as if each pixel
 	// is one "row" and the viewport is textAreaW "rows".
 	thumbX, thumbW, hasThumb := scrollbarGeometry(

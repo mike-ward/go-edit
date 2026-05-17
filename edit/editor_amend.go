@@ -118,12 +118,22 @@ func editorAmendLayout(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout, 
 		updateMaxContentWidth(cfg, &st, frame, wrapActive, total,
 			&maxContentEditRemove)
 
-		// Clamp horizontal scroll.
+		// Clamp horizontal scroll. Use a cursor-aware effective
+		// content width so AmendLayout doesn't clamp away the
+		// cursorScrollPad margin that ensureCursorVisible set
+		// during the preceding EventFn pass.
 		textAreaW := cfg.Width - gutterW - advance/2
 		if wrapActive || textAreaW <= 0 {
 			st.ScrollX = 0
 		} else {
-			maxScrollX := max(frame.maxContentW-textAreaW, 0)
+			effectiveW := frame.maxContentW
+			if len(st.Cursors) > 0 && st.Measurer != nil {
+				lb := cfg.Buffer.Line(st.Cursors[0].Cursor.Line)
+				cx := st.Measurer.XForColumn(lb,
+					st.Cursors[0].Cursor.ByteCol)
+				effectiveW = max(cx+cursorScrollPad, effectiveW)
+			}
+			maxScrollX := max(effectiveW-textAreaW, 0)
 			clampScrollX(&st, maxScrollX)
 		}
 

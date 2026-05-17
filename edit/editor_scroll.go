@@ -2,6 +2,10 @@ package edit
 
 import "github.com/mike-ward/go-edit/edit/buffer"
 
+// cursorScrollPad is the minimum pixel gap kept between the primary
+// cursor and the horizontal viewport edge when scrolling.
+const cursorScrollPad = 8
+
 // clampScroll keeps ScrollY within [0, maxScroll]. Also sanitizes
 // NaN — if ScrollY went NaN from bad input upstream, snap to 0.
 func clampScroll(st *editorState, cfg EditorCfg, frame *editorFrameData, lh float32) {
@@ -85,14 +89,15 @@ func ensureCursorVisible(st *editorState, frame *editorFrameData, cfg EditorCfg)
 		cursorX := st.Measurer.XForColumn(lb, p.Cursor.ByteCol)
 		textAreaW := cfg.Width - frame.gutterW - frame.padLeft
 		if textAreaW > 0 {
-			if cursorX < st.ScrollX {
-				st.ScrollX = cursorX
+			if cursorX < st.ScrollX+cursorScrollPad {
+				st.ScrollX = cursorX - cursorScrollPad
 			}
-			if cursorX > st.ScrollX+textAreaW {
-				st.ScrollX = cursorX - textAreaW
+			if cursorX+cursorScrollPad > st.ScrollX+textAreaW {
+				st.ScrollX = cursorX + cursorScrollPad - textAreaW
 			}
 		}
-		maxScrollX := max(frame.maxContentW-textAreaW, 0)
+		effectiveW := max(cursorX+cursorScrollPad, frame.maxContentW)
+		maxScrollX := max(effectiveW-textAreaW, 0)
 		clampScrollX(st, maxScrollX)
 	}
 }

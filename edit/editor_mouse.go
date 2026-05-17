@@ -383,7 +383,7 @@ func handleHorizScrollbarClick(
 	if textAreaW <= 0 {
 		return
 	}
-	contentW := frame.maxContentW
+	contentW := frame.maxContentW + cursorScrollPad
 	maxScrollX := max(contentW-textAreaW, 0)
 
 	vertVisible := scrollbarVisible(cfg.Scrollbar,
@@ -430,7 +430,7 @@ func startHorizScrollbarDrag(
 			if textAreaW <= 0 {
 				return
 			}
-			contentW := frame.maxContentW
+			contentW := frame.maxContentW + cursorScrollPad
 			maxScrollX := max(contentW-textAreaW, 0)
 			vertVisible := scrollbarVisible(cfg.Scrollbar,
 				frame.totalVisRows, frame.lineHeight, cfg.Height)
@@ -545,7 +545,7 @@ func editorOnMouseScroll(cfg EditorCfg, frame *editorFrameData) func(*gui.Layout
 			}
 			st.ScrollX += dx * adv * 3
 			textAreaW := cfg.Width - frame.gutterW - frame.padLeft
-			maxScrollX := max(frame.maxContentW-textAreaW, 0)
+			maxScrollX := max(frame.maxContentW+cursorScrollPad-textAreaW, 0)
 			clampScrollX(&st, maxScrollX)
 		}
 		storeState(w, cfg.IDFocus, st)
