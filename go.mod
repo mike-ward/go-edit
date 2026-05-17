@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/mike-ward/go-glyph v1.7.1
-	github.com/mike-ward/go-gui v0.19.0
+	github.com/mike-ward/go-gui v0.19.1
 	golang.org/x/text v0.36.0
 )
 
